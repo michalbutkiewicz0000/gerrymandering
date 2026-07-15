@@ -485,19 +485,30 @@ def scenario_import(
 
 
 def _bind_scenario_to_snapshot(scenario, snapshot_id: str) -> None:
-    """Set the snapshot and drop vote units that are not nodes of its graph."""
+    """Bind a scenario to a snapshot so the API and wizard list it for that election.
+
+    National elections (Sejm/Senat/PE/sejmik/rada powiatu) aggregate precinct votes
+    to powiat/gmina at request time and need no per-snapshot precinct graph, so
+    binding only records the snapshot id. Only when a real precinct graph exists —
+    the gmina-council path — is the scenario checked against and trimmed to its nodes.
+    """
     from uuid import UUID
 
     if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
         raise typer.BadParameter("Nieznana migawka")
+    scenario.snapshot_id = UUID(snapshot_id)
     graph_path = settings.processed_dir / "snapshots" / snapshot_id / "graph.json"
     if not graph_path.exists():
-        raise typer.BadParameter("Migawka nie ma zbudowanego grafu (uruchom graph-build)")
-    nodes = {str(node) for node in json.loads(graph_path.read_text(encoding="utf-8"))["node_ids"]}
+        return
+    payload = json.loads(graph_path.read_text(encoding="utf-8"))
+    if payload.get("build_parameters", {}).get("unit_level", "precinct") != "precinct":
+        # A powiat/gmina graph is dissolved from PRG boundaries, not keyed by these
+        # precinct results, so there is nothing to align.
+        return
+    nodes = {str(node) for node in payload["node_ids"]}
     missing = sorted(nodes - set(scenario.votes_by_unit))
     if missing:
         raise typer.BadParameter(f"Brak wyników PKW dla {len(missing)} obwodów, np. {missing[:5]}")
-    scenario.snapshot_id = UUID(snapshot_id)
     scenario.votes_by_unit = {node: scenario.votes_by_unit[node] for node in nodes}
     scenario.eligible_by_unit = {k: v for k, v in scenario.eligible_by_unit.items() if k in nodes}
     scenario.population_by_unit = {k: v for k, v in scenario.population_by_unit.items() if k in nodes}

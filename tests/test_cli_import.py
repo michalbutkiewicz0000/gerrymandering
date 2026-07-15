@@ -7,7 +7,7 @@ import typer
 from shapely.geometry import box
 
 from gerry import cli
-from gerry.domain import JobStatus
+from gerry.domain import JobStatus, VoteScenario
 from gerry import scip_solver
 from gerry import postgis_sync as postgis_sync_module
 from gerry.snapshots import SnapshotStore
@@ -115,6 +115,25 @@ def test_graph_cli_persists_versioned_api_compatible_payload(tmp_path, monkeypat
         "boundary_tolerance_m": 0.01,
     }
     assert not output.with_suffix(".json.part").exists()
+
+
+def test_scenario_import_binds_to_snapshot_without_precinct_graph(tmp_path, monkeypatch):
+    # A national election needs no precinct graph: binding records the snapshot id
+    # and keeps every precinct vote for later aggregation to powiat/gmina.
+    monkeypatch.setattr(cli.settings, "data_dir", tmp_path)
+    snapshot = SnapshotStore(tmp_path / "raw/snapshots").create("sejm2019", date(2019, 10, 13))
+    results = tmp_path / "wyniki.csv"
+    results.write_text(
+        "TERYT,Numer obwodu,A,B\n020101,1,60,30\n146502,1,10,90\n", encoding="utf-8"
+    )
+    output = tmp_path / "scenario.json"
+
+    cli.scenario_import(results, "Sejm 2019 — PKW", output, snapshot=str(snapshot.id))
+
+    scenario = VoteScenario.model_validate_json(output.read_text(encoding="utf-8"))
+    assert str(scenario.snapshot_id) == str(snapshot.id)
+    assert set(scenario.votes_by_unit) == {"020101_1", "146502_1"}
+    assert (tmp_path / "artifacts" / "scenarios" / f"{scenario.id}.json").is_file()
 
 
 def test_graph_cli_dissolves_gminy_into_powiat_nodes(tmp_path, monkeypatch):
