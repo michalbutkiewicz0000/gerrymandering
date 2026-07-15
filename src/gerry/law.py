@@ -33,6 +33,26 @@ PROFILE_CITATIONS = {
 }
 
 
+def profile_unit_plan(profile_id: str) -> dict:
+    """Granularity a profile draws districts over.
+
+    ``unit_level`` is the atomic node (``powiat``/``gmina``/``precinct``);
+    ``scope_level`` is the administrative unit the user picks to limit generation
+    (``None`` means the whole country); ``split_population_gt``, when set, keeps a
+    gmina un-aggregated once its population exceeds the threshold — the Senate's
+    provision for splitting a city above 500 000 residents.
+    """
+    profile = PROFILE_RULES.get(profile_id)
+    if profile is None:
+        raise KeyError(profile_id)
+    return {
+        "unit_level": profile.get("unit_level", "precinct"),
+        "scope_level": profile.get("scope_level"),
+        "container_level": profile.get("container_level"),
+        "split_population_gt": profile.get("split_population_gt"),
+    }
+
+
 class LegalValidator:
     def validate(self, request: OptimizationRequest, plan: DistrictPlan) -> ValidationReport:
         findings: list[ValidationFinding] = []

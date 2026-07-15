@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -12,10 +12,12 @@ from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .assembly import assemble_districting_inputs
 from .domain import DataSnapshot, DistrictPlan, OptimizationRequest, OptimizationRun, VoteScenario
-from .graph import build_adjacency, validate_graph
-from .law import LAW_PROFILE_SHA256, LegalValidator, PROFILE_CITATIONS
+from .graph import build_adjacency, dissolve_to_level, validate_graph
+from .law import LAW_PROFILE_SHA256, LegalValidator, PROFILE_CITATIONS, profile_unit_plan
 from .pipeline import NationalReconstructionPipeline
+from .territory import unit_options
 from .snapshots import SnapshotStore
 from .exports import export_run
 from .settings import settings
@@ -53,6 +55,15 @@ class GraphCreate(BaseModel):
     key_column: str = Field(default="key", min_length=1)
     min_shared_border_m: float = Field(default=1.0, ge=0)
     boundary_tolerance_m: float = Field(default=0.01, ge=0)
+    unit_level: Literal["precinct", "gmina", "powiat"] = "precinct"
+    keep_gmina: list[str] = Field(default_factory=list)
+
+
+class DistrictingAssemble(BaseModel):
+    snapshot_id: UUID
+    profile_id: str = Field(min_length=1)
+    scenario_id: UUID
+    unit: str | None = None
 
 
 class ValidationCreate(BaseModel):
@@ -138,6 +149,18 @@ def capabilities() -> dict:
 @app.get("/api/profiles")
 def profiles() -> dict[str, str]:
     return PROFILE_CITATIONS
+
+
+@app.get("/api/profiles/plans")
+def profile_plans() -> dict[str, dict]:
+    """Node and scope granularity per profile, driving the wizard's unit cascade."""
+    return {profile_id: profile_unit_plan(profile_id) for profile_id in PROFILE_CITATIONS}
+
+
+@app.get("/api/units")
+def units() -> dict[str, list[dict[str, str]]]:
+    """Frozen województwo → powiat → gmina options for scoping local elections."""
+    return unit_options()
 
 
 @app.get("/api/examples/small")
@@ -309,6 +332,18 @@ def build_graph(body: GraphCreate) -> dict:
     if not source.exists():
         raise HTTPException(status_code=404, detail="Brak warstwy geometrii")
     frame = gpd.read_file(source)
+    if body.unit_level != "precinct":
+        if "teryt" not in frame:
+            raise HTTPException(
+                status_code=422,
+                detail="Zlewanie do gmina/powiat wymaga kolumny teryt w warstwie",
+            )
+        frame = dissolve_to_level(
+            frame,
+            body.unit_level,
+            key_column=body.key_column,
+            keep_gmina=frozenset(body.keep_gmina),
+        )
     try:
         edges = build_adjacency(
             frame, key_column=body.key_column,
@@ -326,6 +361,7 @@ def build_graph(body: GraphCreate) -> dict:
         "errors": validate_graph(node_ids, edges),
         "build_parameters": {
             "key_column": body.key_column,
+            "unit_level": body.unit_level,
             "metric_crs": 2180,
             "min_shared_border_m": body.min_shared_border_m,
             "boundary_tolerance_m": body.boundary_tolerance_m,
@@ -353,6 +389,52 @@ def get_graph(snapshot_id: UUID) -> dict:
     if "node_ids" not in payload:
         raise HTTPException(status_code=409, detail="Graf ma przestarzały format; zbuduj go ponownie")
     return payload
+
+
+@app.post("/api/districting/assemble")
+def assemble_districting(body: DistrictingAssemble) -> dict:
+    """Assemble the graph, aggregated scenario and geometry for one election.
+
+    The profile decides the node granularity (powiat/gmina/precinct) and whether a
+    scope unit is required, so national elections never touch precinct reconstruction.
+    """
+    if snapshot_store.get(body.snapshot_id) is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono migawki")
+    try:
+        plan = profile_unit_plan(body.profile_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Nieznany profil") from exc
+    scenario_path = settings.artifacts_dir / "scenarios" / f"{body.scenario_id}.json"
+    if not scenario_path.exists():
+        raise HTTPException(status_code=404, detail="Nie znaleziono scenariusza")
+    scenario = VoteScenario.model_validate_json(scenario_path.read_text(encoding="utf-8"))
+
+    gminy = precincts = None
+    if plan["unit_level"] == "precinct":
+        precincts_path = (
+            settings.processed_dir / "snapshots" / str(body.snapshot_id) / "precincts.gpkg"
+        )
+        if not precincts_path.is_file():
+            raise HTTPException(status_code=404, detail="Brak zrekonstruowanej warstwy obwodów")
+        precincts = gpd.read_file(precincts_path)
+    else:
+        boundary_path = settings.raw_dir / "prg_boundaries" / "gminy.parquet"
+        if not boundary_path.is_file():
+            raise HTTPException(status_code=404, detail="Brak warstwy granic gmin")
+        gminy = gpd.read_parquet(boundary_path)
+
+    try:
+        result = assemble_districting_inputs(
+            profile_id=body.profile_id,
+            scenario=scenario,
+            gminy=gminy,
+            precincts=precincts,
+            unit=body.unit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result["scenario"] = json.loads(result["scenario"].model_dump_json())
+    return result
 
 
 @app.post("/api/plans/validate")

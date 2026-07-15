@@ -12,7 +12,7 @@ def test_frontend_is_a_guided_wizard_for_non_experts() -> None:
     # Numbered, plain-language steps guide the user.
     for heading in (
         "Wybierz wybory",
-        "Zaznacz obszar na mapie",
+        "Rodzaj wyborów i obszar",
         "Kogo chcesz faworyzować",
         "Ustawienia podziału",
     ):
@@ -65,22 +65,27 @@ def test_frontend_form_covers_every_district_rule() -> None:
         assert field in script
 
 
-def test_frontend_area_selection_filters_all_node_scoped_inputs() -> None:
+def test_frontend_assembles_inputs_server_side_per_profile() -> None:
     index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
 
-    assert 'id="select-all"' in index
-    assert "/precincts" in script
-    assert "toggleNode" in script
+    # The area is no longer clicked precinct-by-precinct; the server assembles the
+    # graph, aggregated scenario and geometry for the chosen electoral profile.
+    assert "/api/districting/assemble" in script
+    assert "buildRequestFromResult" in script
+
+    # The samorząd cascade lets the user scope to one województwo → powiat → gmina.
+    for control in ("sel-wojewodztwo", "sel-powiat", "sel-gmina"):
+        assert f'id="{control}"' in index
+    assert "scope_level" in script
+
+    # The assembled result still drives every node-scoped request field.
     for field in (
         "nodes",
         "edges",
-        "votes_by_unit",
-        "eligible_by_unit",
-        "population_by_unit",
+        "scenario",
         "geometry_by_node",
-        "base_assignment",
-        "parent_by_node",
         "container_by_node",
+        "parent_by_node",
     ):
         assert field in script

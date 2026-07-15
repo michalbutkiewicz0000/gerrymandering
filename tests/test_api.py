@@ -9,7 +9,9 @@ from fastapi import HTTPException, Response
 from shapely.geometry import box
 from gerry.api import (
     _data_path,
+    DistrictingAssemble,
     GraphCreate,
+    assemble_districting,
     build_graph,
     capabilities,
     create_scenario,
@@ -22,9 +24,11 @@ from gerry.api import (
     health,
     list_optimizations,
     list_scenarios,
+    profile_plans,
     profiles,
     readiness,
     small_example,
+    units,
 )
 from gerry.domain import OptimizationRequest, VoteScenario
 from gerry.services import optimization_service
@@ -211,6 +215,79 @@ def test_api_builds_and_persists_graph_inside_snapshot(tmp_path, monkeypatch):
 
     loaded = get_graph(snapshot_id)
     assert loaded["node_ids"] == ["a", "b"]
+
+
+def test_profile_plans_expose_node_and_scope_levels():
+    plans = profile_plans()
+    assert plans["pl-sejm@2026-07-15"] == {
+        "unit_level": "powiat",
+        "scope_level": None,
+        "container_level": "wojewodztwo",
+        "split_population_gt": None,
+    }
+    assert plans["pl-rada-powiatu@2026-07-15"]["scope_level"] == "powiat"
+
+
+def test_units_cascade_links_powiat_to_wojewodztwo():
+    options = units()
+    assert len(options["wojewodztwa"]) == 16
+    assert all(powiat["parent"] == powiat["code"][:2] for powiat in options["powiaty"])
+    assert all(gmina["parent"] == gmina["code"][:4] for gmina in options["gminy"])
+
+
+def test_assemble_sejm_builds_powiat_nodes(tmp_path, monkeypatch):
+    snapshot_id = uuid4()
+    monkeypatch.setattr(api_module.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(api_module.snapshot_store, "get", lambda candidate: object())
+    boundary_dir = tmp_path / "raw" / "prg_boundaries"
+    boundary_dir.mkdir(parents=True)
+    gpd.GeoDataFrame(
+        {"teryt": ["020301", "020302", "020401"]},
+        geometry=[box(0, 0, 10, 10), box(10, 0, 20, 10), box(20, 0, 30, 10)],
+        crs=2180,
+    ).to_parquet(boundary_dir / "gminy.parquet", index=False)
+    scenario = VoteScenario(
+        name="s",
+        votes_by_unit={"020301_1": {"A": 5}, "020302_1": {"A": 2}, "020401_1": {"A": 9}},
+    )
+    create_scenario(scenario)
+
+    result = assemble_districting(
+        DistrictingAssemble(
+            snapshot_id=snapshot_id,
+            profile_id="pl-sejm@2026-07-15",
+            scenario_id=scenario.id,
+        )
+    )
+
+    assert result["unit_level"] == "powiat"
+    assert sorted(result["graph"]["node_ids"]) == ["0203", "0204"]
+    assert result["scenario"]["votes_by_unit"]["0203"] == {"A": 7}
+    nodes = {feature["properties"]["node"] for feature in result["geometry"]["features"]}
+    assert nodes == {"0203", "0204"}
+
+
+def test_assemble_rada_powiatu_requires_unit(tmp_path, monkeypatch):
+    snapshot_id = uuid4()
+    monkeypatch.setattr(api_module.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(api_module.snapshot_store, "get", lambda candidate: object())
+    boundary_dir = tmp_path / "raw" / "prg_boundaries"
+    boundary_dir.mkdir(parents=True)
+    gpd.GeoDataFrame(
+        {"teryt": ["020301"]}, geometry=[box(0, 0, 10, 10)], crs=2180
+    ).to_parquet(boundary_dir / "gminy.parquet", index=False)
+    scenario = VoteScenario(name="s", votes_by_unit={"020301_1": {"A": 1}})
+    create_scenario(scenario)
+
+    with pytest.raises(HTTPException) as excinfo:
+        assemble_districting(
+            DistrictingAssemble(
+                snapshot_id=snapshot_id,
+                profile_id="pl-rada-powiatu@2026-07-15",
+                scenario_id=scenario.id,
+            )
+        )
+    assert excinfo.value.status_code == 422
 
 
 def test_api_returns_snapshot_precinct_geometry_as_geojson(tmp_path, monkeypatch):

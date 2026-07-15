@@ -37,7 +37,28 @@ python -m venv .venv
 .venv/bin/gerry doctor
 ```
 
-## Przykładowy przepływ
+## Jednostka podziału zależy od ordynacji
+
+Obwód jest źródłem głosów, ale nie zawsze jednostką podziału. Węzłem grafu, na
+którym pracuje solver, jest jednostka niepodzielna danej ordynacji: **powiat**
+dla Sejmu, Senatu, PE i sejmiku (okręgu nie wolno tworzyć dzieląc powiat),
+**gmina** dla rady powiatu, a **obwód** dopiero dla rady gminy. Głosy obwodowe
+agregujemy w górę po kodzie TERYT, a granice powiatów/gmin bierzemy z warstwy
+PRG — dlatego kosztowna rekonstrukcja geometrii obwodów jest potrzebna wyłącznie
+dla rady gminy i tylko dla jednej wskazanej gminy.
+
+W interfejsie WWW (i przez `POST /api/districting/assemble`) wybór rodzaju
+wyborów sam ustala poziom węzła i agreguje głosy; dla wyborów samorządowych
+kaskada województwo→powiat→gmina ogranicza obliczenia do wskazanej jednostki.
+Poziom, zakres i kontener każdego profilu są zapisane w `legal_profiles.yaml`.
+W CLI graf na powiatach/gminach buduje `gerry graph-build … --unit-level powiat`
+(warstwa z kolumną `teryt` jest zlewana do węzłów tego poziomu).
+
+## Przykładowy przepływ (ścieżka obwodowa — rada gminy)
+
+Poniższy przebieg pokazuje rekonstrukcję obwodów potrzebną dla wyborów do rady
+gminy. Dla wyborów krajowych pomiń `reconstruct` — graf powiatów i agregację
+głosów złoży wizard lub `/api/districting/assemble`.
 
 ```bash
 gerry snapshot-create sejm2023 2023-10-15

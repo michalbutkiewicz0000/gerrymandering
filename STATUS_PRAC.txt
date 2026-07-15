@@ -4,12 +4,23 @@ Stan na: 15 lipca 2026 r.
 CEL PROJEKTU
 ============
 
-Program ma automatycznie rekonstruować granice polskich obwodów głosowania,
-budować graf ich sąsiedztwa, importować historyczne wyniki i scenariusze,
-sprawdzać materialne oraz formalne reguły prawa wyborczego, a następnie
-wyznaczać najlepsze dla wskazanego komitetu lub — w wyborach JOW — kandydata
-spójne podziały na okręgi. Całość ma działać lokalnie przez Docker, API, CLI
-i interfejs WWW.
+Program ma importować historyczne wyniki PKW i scenariusze, sprawdzać materialne
+oraz formalne reguły prawa wyborczego, a następnie wyznaczać najlepsze dla
+wskazanego komitetu lub — w wyborach JOW — kandydata spójne podziały na okręgi.
+Całość ma działać lokalnie przez Docker, API, CLI i interfejs WWW.
+
+Jednostka podziału zależy od ordynacji, a nie jest zawsze obwodem. Obwód jest
+źródłem głosów (tam PKW trzyma wyniki), lecz węzłem grafu — jednostką, którą
+układa solver — jest jednostka niepodzielna danej ordynacji: w wyborach do
+Sejmu, Senatu, PE i sejmiku to powiat (okręgów nie wolno tworzyć dzieląc
+powiat), w radzie powiatu — gmina, a dopiero w radzie gminy — obwód. Głosy
+obwodowe agregujemy w górę po kodzie TERYT (powiat = pierwsze cztery cyfry,
+gmina = sześć), a granice powiatów/gmin bierzemy z warstwy PRG. Dzięki temu
+kosztowna rekonstrukcja geometrii obwodów jest potrzebna wyłącznie dla rady
+gminy i tylko dla wskazanej gminy, nie dla całego kraju. Ustawodawczy wyjątek
+dzielenia miasta powyżej 500 tys. mieszkańców (Senat) zachowuje dzielnice takiego
+miasta jako osobne węzły. Poziom, zakres i kontener każdego profilu są zapisane
+deklaratywnie w `legal_profiles.yaml` i objęte skrótem SHA-256 stanu prawa.
 
 
 1. CO JUŻ UDAŁO SIĘ ZROBIĆ

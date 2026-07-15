@@ -15,6 +15,22 @@ PRG_LAYER = "ms:prg-adresy"
 PRG_BOUNDARIES_WFS_URL = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/PRG/WFS/AdministrativeBoundaries"
 PAGE_SIZE = 10_000
 
+UNIT_LEVELS = ("precinct", "gmina", "powiat")
+
+
+def node_key_for_teryt(teryt: str, level: str, keep_gmina: frozenset[str] = frozenset()) -> str:
+    """Node key for a gmina TERYT at ``level``.
+
+    A gmina node is the 6-digit TERYT, a powiat node its first four digits.
+    ``keep_gmina`` holds gmina TERYT codes that stay gmina-grained even under the
+    powiat level — Warsaw districts the Senate profile is allowed to split.
+    """
+    if level == "gmina":
+        return teryt
+    if level == "powiat":
+        return teryt if teryt in keep_gmina else teryt[:4]
+    raise ValueError(f"level {level!r} has no teryt-derived node key; expected 'gmina' or 'powiat'")
+
 
 def normalize_teryt(value) -> str:
     if value is None or pd.isna(value):

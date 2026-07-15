@@ -2,8 +2,9 @@ const escapeHtml=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;'
 function coordinatePairs(value,result=[]){if(Array.isArray(value)&&value.length>=2&&typeof value[0]==='number'&&typeof value[1]==='number'){result.push(value);return result}if(Array.isArray(value))value.forEach(child=>coordinatePairs(child,result));return result}
 const svgNamespace='http://www.w3.org/2000/svg',districtColors=['#2e7d63','#d7903f','#526ea8','#a85967','#8a6d3b','#5d8f91','#8064a2','#789447'];
 const PROFILE_LABELS={'generic-jow':'Ogólny — okręgi jednomandatowe (JOW)','generic-proportional':'Ogólny — proporcjonalny','sejm':'Sejm','senat':'Senat','europarlament':'Parlament Europejski','rada-gminy-do-20k':'Rada gminy do 20 tys.','rada-gminy-powyzej-20k':'Rada gminy powyżej 20 tys.','rada-powiatu':'Rada powiatu','sejmik':'Sejmik województwa'};
-const friendlyProfile=id=>PROFILE_LABELS[id]??id;
-let loadedGraph=null,loadedScenario=null,loadedGeometry=null,selectedNodes=new Set();
+const friendlyProfile=id=>PROFILE_LABELS[String(id).replace(/^pl-/,'').replace(/@.*$/,'')]??id;
+const LEVEL_LABELS={powiat:'powiaty',gmina:'gminy',precinct:'obwody'};
+let loadedResult=null,loadedScenario=null,loadedPlans={},loadedUnits={wojewodztwa:[],powiaty:[],gminy:[]};
 function geometryPolygons(geometry){if(!geometry)return[];if(geometry.type==='Polygon')return[geometry.coordinates];if(geometry.type==='MultiPolygon')return geometry.coordinates;return[]}
 function renderGeoJson(data,{selectable=false,target='#map'}={}){
   const svg=document.querySelector(target),coordinates=data.features.flatMap(feature=>coordinatePairs(feature.geometry?.coordinates??[]));svg.replaceChildren();
@@ -14,33 +15,43 @@ function renderGeoJson(data,{selectable=false,target='#map'}={}){
   const project=point=>[offsetX+(point[0]-minX)*scale,600-(offsetY+(point[1]-minY)*scale)];
   data.features.forEach(feature=>geometryPolygons(feature.geometry).forEach(polygon=>{
     const path=document.createElementNS(svgNamespace,'path'),district=Number(feature.properties?.district??0),commands=polygon.map(ring=>ring.map((point,index)=>{const [x,y]=project(point);return`${index?'L':'M'}${x.toFixed(2)},${y.toFixed(2)}`}).join(' ')+' Z').join(' ');
-    const node=String(feature.properties?.node??feature.properties?.key??'');path.setAttribute('d',commands);path.dataset.node=node;path.setAttribute('fill',selectable?(selectedNodes.has(node)?'#2e7d63':'#c7ceca'):districtColors[Math.abs(district)%districtColors.length]);path.setAttribute('fill-rule','evenodd');path.setAttribute('stroke','#152820');path.setAttribute('stroke-width','1.2');path.setAttribute('vector-effect','non-scaling-stroke');if(selectable){path.classList.add('selectable');path.onclick=()=>toggleNode(node)}
-    const title=document.createElementNS(svgNamespace,'title');title.textContent=selectable?`${feature.properties?.node??'jednostka'} — kliknij, aby zaznaczyć/odznaczyć`:`${feature.properties?.node??'jednostka'} — okręg ${feature.properties?.district??'—'}`;path.append(title);svg.append(path);
+    const node=String(feature.properties?.node??feature.properties?.key??'');path.setAttribute('d',commands);path.dataset.node=node;path.setAttribute('fill',selectable?'#2e7d63':districtColors[Math.abs(district)%districtColors.length]);path.setAttribute('fill-rule','evenodd');path.setAttribute('stroke','#152820');path.setAttribute('stroke-width','1.2');path.setAttribute('vector-effect','non-scaling-stroke');
+    const title=document.createElementNS(svgNamespace,'title');title.textContent=`${feature.properties?.node??'jednostka'}${feature.properties?.district!==undefined?` — okręg ${feature.properties.district}`:''}`;path.append(title);svg.append(path);
   }));
 }
-
-function filterMapping(mapping,allowed){return Object.fromEntries(Object.entries(mapping??{}).filter(([node])=>allowed.has(node)))}
-function applySelectedArea(){
-  if(!loadedGraph||!loadedScenario||!loadedGeometry)return;
-  const allowed=selectedNodes,body=JSON.parse(document.querySelector('#request').value),features=loadedGeometry.features.filter(feature=>allowed.has(String(feature.properties?.node)));
-  body.nodes=loadedGraph.node_ids.filter(node=>allowed.has(String(node)));body.edges=loadedGraph.edges.filter(edge=>allowed.has(String(edge.source))&&allowed.has(String(edge.target)));
-  body.scenario={...loadedScenario,votes_by_unit:filterMapping(loadedScenario.votes_by_unit,allowed),eligible_by_unit:filterMapping(loadedScenario.eligible_by_unit,allowed),population_by_unit:filterMapping(loadedScenario.population_by_unit,allowed)};
-  body.geometry_by_node=Object.fromEntries(features.map(feature=>[String(feature.properties.node),feature.geometry]));body.base_assignment=body.base_assignment?filterMapping(body.base_assignment,allowed):null;body.parent_by_node=filterMapping(body.parent_by_node,allowed);body.container_by_node=filterMapping(body.container_by_node,allowed);
-  document.querySelector('#request').value=JSON.stringify(applyForm(body),null,2);
-  document.querySelector('#load-data-status').textContent=`Zaznaczono ${body.nodes.length} z ${loadedGraph.node_ids.length} obwodów.`;
-}
-function redrawSelection(){document.querySelectorAll('#map path[data-node]').forEach(path=>path.setAttribute('fill',selectedNodes.has(path.dataset.node)?'#2e7d63':'#c7ceca'))}
-function toggleNode(node){selectedNodes.has(node)?selectedNodes.delete(node):selectedNodes.add(node);redrawSelection();applySelectedArea()}
 
 function scenarioCommittees(scenario){const set=new Set();Object.values(scenario?.votes_by_unit??{}).forEach(row=>Object.keys(row??{}).forEach(name=>set.add(name)));return Array.from(set).sort((a,b)=>a.localeCompare(b,'pl'))}
 function populateTargetChoices(){
   const select=document.querySelector('#target'),keep=select.value,names=scenarioCommittees(loadedScenario);
   if(!names.length){select.innerHTML='<option value="">— brak danych o komitetach —</option>';return}
-  if(keep&&!names.includes(keep))names.unshift(keep);
   select.innerHTML=names.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  // Keep the user's choice only if it is a real committee in the loaded data;
+  // otherwise pick the first one (drops the placeholder target from the example).
   select.value=names.includes(keep)?keep:names[0];
 }
 function toggleAnchorField(){document.querySelector('#anchor-field').hidden=document.querySelector('#target-kind').value!=='candidate'}
+
+// ——— Rodzaj wyborów (profil) i kaskada jednostki ———
+function currentPlan(){return loadedPlans[document.querySelector('#profile').value]||{}}
+function scopeHint(plan){
+  const level=LEVEL_LABELS[plan.unit_level]||'jednostki';
+  if(!plan.scope_level)return`Jednostka podziału: ${level}. Liczymy cały kraj — powiatu nie wolno dzielić między okręgi.`;
+  return`Jednostka podziału: ${level}. Wskaż ${plan.scope_level==='wojewodztwo'?'województwo':plan.scope_level}, policzymy tylko je.`;
+}
+function fillSelect(select,options,placeholder){select.innerHTML=`<option value="">${placeholder}</option>`+options.map(item=>`<option value="${item.code}">${escapeHtml(item.name)} (${item.code})</option>`).join('')}
+function populateWojewodztwa(){fillSelect(document.querySelector('#sel-wojewodztwo'),loadedUnits.wojewodztwa,'— wybierz —')}
+function refreshPowiaty(){const woj=document.querySelector('#sel-wojewodztwo').value;fillSelect(document.querySelector('#sel-powiat'),loadedUnits.powiaty.filter(item=>item.parent===woj),'— wybierz —');refreshGminy()}
+function refreshGminy(){const pow=document.querySelector('#sel-powiat').value;fillSelect(document.querySelector('#sel-gmina'),loadedUnits.gminy.filter(item=>item.parent===pow),'— wybierz —')}
+function selectedUnit(){const plan=currentPlan();if(plan.scope_level==='wojewodztwo')return document.querySelector('#sel-wojewodztwo').value;if(plan.scope_level==='powiat')return document.querySelector('#sel-powiat').value;if(plan.scope_level==='gmina')return document.querySelector('#sel-gmina').value;return''}
+function updateCascade(){
+  const plan=currentPlan(),scope=plan.scope_level;
+  const showW=scope==='wojewodztwo'||scope==='powiat'||scope==='gmina';
+  document.querySelector('#cascade').hidden=!showW;
+  document.querySelector('#field-powiat').hidden=!(scope==='powiat'||scope==='gmina');
+  document.querySelector('#field-gmina').hidden=scope!=='gmina';
+  document.querySelector('#profile-hint').textContent=scopeHint(plan);
+  if(showW&&!document.querySelector('#sel-wojewodztwo').options.length)populateWojewodztwa();
+}
 
 function statusExplanation(run){
   const seats=run.incumbent?.target_seats;
@@ -93,6 +104,22 @@ function applyForm(body){
   return body;
 }
 
+function buildRequestFromResult(){
+  const base=JSON.parse(document.querySelector('#request').value||'{}'),result=loadedResult;
+  const body={
+    ...base,
+    profile_id:document.querySelector('#profile').value||base.profile_id,
+    scenario:result.scenario,
+    nodes:result.graph.node_ids,
+    edges:result.graph.edges,
+    parent_by_node:{},
+    container_by_node:result.container_by_node||{},
+    geometry_by_node:Object.fromEntries(result.geometry.features.map(feature=>[String(feature.properties.node),feature.geometry])),
+    base_assignment:null,
+  };
+  return applyForm(body);
+}
+
 function populateForm(body){
   document.querySelector('#profile').value=body.profile_id;
   document.querySelector('#target-kind').value=body.target_kind;toggleAnchorField();
@@ -114,23 +141,24 @@ function autoSelectScenario(){
   if(match)select.value=match.value;
 }
 
-async function loadData(){
-  const snapshot=document.querySelector('#snapshot').value;autoSelectScenario();
-  const scenario=document.querySelector('#scenario').value,status=document.querySelector('#load-data-status');
+async function prepareMap(){
+  const snapshot=document.querySelector('#snapshot').value,profile=document.querySelector('#profile').value,plan=currentPlan(),status=document.querySelector('#prepare-status');
   if(!snapshot){status.textContent='Najpierw wybierz wybory w kroku 1.';return}
+  autoSelectScenario();
+  const scenario=document.querySelector('#scenario').value;
   if(!scenario){status.textContent='Dla tych wyborów nie ma jeszcze zestawu wyników.';return}
-  status.textContent='Wczytywanie mapy… (dla całego kraju może to potrwać kilka sekund)';
+  let unit=null;
+  if(plan.scope_level){unit=selectedUnit();if(!unit){status.textContent=`Wskaż jednostkę (${plan.scope_level==='wojewodztwo'?'województwo':plan.scope_level}).`;return}}
+  status.textContent='Przygotowywanie mapy… (dla całego kraju może to potrwać kilka sekund)';
   try{
-    const [graph,votes,geometry]=await Promise.all([
-      fetch(`/api/graphs/${snapshot}`).then(response=>{if(!response.ok)throw new Error('Brak aktualnego grafu dla tych wyborów');return response.json()}),
-      fetch(`/api/scenarios/${scenario}`).then(response=>{if(!response.ok)throw new Error('Brak zestawu wyników');return response.json()}),
-      fetch(`/api/snapshots/${snapshot}/precincts`).then(response=>{if(!response.ok)throw new Error('Brak geometrii obwodów dla tych wyborów');return response.json()}),
-    ]);
-    if(votes.snapshot_id&&votes.snapshot_id!==snapshot)throw new Error('Zestaw wyników należy do innych wyborów');
-    const geometryNodes=new Set(geometry.features.map(feature=>String(feature.properties?.node)));if(graph.node_ids.some(node=>!geometryNodes.has(String(node))))throw new Error('Geometria nie zawiera wszystkich obwodów');
-    loadedGraph=graph;loadedScenario=votes;loadedGeometry=geometry;selectedNodes=new Set(graph.node_ids.map(String));
-    renderGeoJson(geometry,{selectable:true});populateTargetChoices();applySelectedArea();
-    document.querySelector('#select-all').disabled=false;document.querySelector('#clear-selection').disabled=false;
+    const response=await fetch('/api/districting/assemble',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({snapshot_id:snapshot,profile_id:profile,scenario_id:scenario,unit})});
+    const payload=await response.json();if(!response.ok)throw new Error(typeof payload.detail==='string'?payload.detail:JSON.stringify(payload.detail));
+    loadedResult=payload;loadedScenario=payload.scenario;
+    renderGeoJson(payload.geometry,{selectable:false,target:'#map'});
+    populateTargetChoices();
+    document.querySelector('#request').value=JSON.stringify(buildRequestFromResult(),null,2);
+    const problems=payload.graph.errors?.length?` Uwaga: ${payload.graph.errors.length} problemów spójności grafu.`:'';
+    status.textContent=`Gotowe: ${payload.graph.node_ids.length} jednostek (${LEVEL_LABELS[payload.unit_level]||payload.unit_level}). Przejdź do kroku 3.${problems}`;
   }catch(error){status.textContent=`Błąd: ${error.message}`}
 }
 
@@ -138,14 +166,20 @@ async function loadReconstructionReport(){
   const snapshot=document.querySelector('#snapshot').value,container=document.querySelector('#reconstruction-report');
   if(!snapshot){container.textContent='Wybierz wybory (krok 1).';return}
   const response=await fetch(`/api/reconstruction/${snapshot}/report?failed_only=true&limit=50&offset=0`);
-  if(response.status===404){container.textContent='Dla tych wyborów nie ma jeszcze raportu rekonstrukcji.';return}
+  if(response.status===404){container.textContent='Rekonstrukcja obwodów jest potrzebna tylko dla wyborów do rady gminy; dla tych wyborów jej nie ma.';return}
   if(!response.ok){container.textContent='Nie udało się odczytać raportu.';return}
   const payload=await response.json(),manifest=payload.manifest??{},complete=manifest.complete_country?'tak':'nie';
   container.innerHTML=`<dl><dt>Gminy poprawne</dt><dd>${escapeHtml(manifest.successful??'—')}</dd><dt>Błędy</dt><dd class="${(manifest.failed??payload.total)>0?'warn':'ok'}">${escapeHtml(manifest.failed??payload.total)}</dd><dt>Kompletny kraj</dt><dd>${complete}</dd></dl>${payload.reports.length?`<div class="quality-list">${payload.reports.map(report=>`<div><strong>${escapeHtml(report.teryt??'—')}</strong><span>${escapeHtml(report.error??'wymaga kontroli jakości')}</span></div>`).join('')}</div>`:'<p class="ok">Brak zgłoszonych błędów.</p>'}`;
 }
 
 async function loadAssets(){
-  const [snapshots,scenarios]=await Promise.all([fetch('/api/snapshots').then(response=>response.json()),fetch('/api/scenarios?limit=200&offset=0').then(response=>response.json())]);
+  const [snapshots,scenarios,plans,unitOptions]=await Promise.all([
+    fetch('/api/snapshots').then(response=>response.json()),
+    fetch('/api/scenarios?limit=200&offset=0').then(response=>response.json()),
+    fetch('/api/profiles/plans').then(response=>response.json()),
+    fetch('/api/units').then(response=>response.json()),
+  ]);
+  loadedPlans=plans;loadedUnits=unitOptions;
   document.querySelector('#snapshot').innerHTML='<option value="">— wybierz wybory —</option>'+snapshots.map(item=>`<option value="${item.id}">${escapeHtml(item.election_id)} · ${escapeHtml(item.effective_date)}</option>`).join('');
   document.querySelector('#scenario').innerHTML='<option value="">— automatyczny —</option>'+scenarios.map(item=>`<option value="${item.id}" data-snapshot="${item.snapshot_id??''}">${escapeHtml(item.name)}</option>`).join('');
 }
@@ -153,6 +187,7 @@ async function loadAssets(){
 async function submit(){
   const button=document.querySelector('#submit'),status=document.querySelector('#submit-status');button.disabled=true;
   try{
+    if(!loadedResult)throw new Error('Najpierw przygotuj mapę w kroku 2.');
     const body=applyForm(JSON.parse(document.querySelector('#request').value));
     document.querySelector('#request').value=JSON.stringify(body,null,2);
     status.textContent='Wysyłanie zadania…';
@@ -169,7 +204,7 @@ async function load(){
   const capabilities=await fetch('/api/system/capabilities').then(response=>response.json());
   banner.textContent=health.status==='ok'?(capabilities.certified_large_jobs?'Program gotowy — dokładny solver z certyfikatem dostępny.':'Program działa — dokładny solver dostępny dla małych obszarów.'):'Problem z połączeniem z programem.';
   banner.className='system-banner '+(health.status==='ok'?'ok':'warn');
-  document.querySelector('#capabilities').innerHTML=`<dt>Duży solver dokładny</dt><dd class="${capabilities.certified_large_jobs?'ok':'warn'}">${capabilities.certified_large_jobs?'gotowy (z certyfikatem)':'niedostępny'}</dd><dt>Biblioteka</dt><dd>${escapeHtml(capabilities.scip_detail)}</dd><dt>Mały solver</dt><dd>pełne wyczerpanie do ${capabilities.exhaustive_node_limit} obwodów</dd>`;
+  document.querySelector('#capabilities').innerHTML=`<dt>Duży solver dokładny</dt><dd class="${capabilities.certified_large_jobs?'ok':'warn'}">${capabilities.certified_large_jobs?'gotowy (z certyfikatem)':'niedostępny'}</dd><dt>Biblioteka</dt><dd>${escapeHtml(capabilities.scip_detail)}</dd><dt>Mały solver</dt><dd>pełne wyczerpanie do ${capabilities.exhaustive_node_limit} jednostek</dd>`;
   const profiles=await fetch('/api/profiles').then(response=>response.json());
   document.querySelector('#profiles').innerHTML=Object.entries(profiles).map(([id,citation])=>`<li><strong>${escapeHtml(friendlyProfile(id))}</strong><br><small>${escapeHtml(citation)}</small></li>`).join('');
   const select=document.querySelector('#profile');if(!select.options.length)select.innerHTML=Object.keys(profiles).map(id=>`<option value="${escapeHtml(id)}">${escapeHtml(friendlyProfile(id))}</option>`).join('');
@@ -182,11 +217,13 @@ async function init(){
   await Promise.all([load(),loadAssets()]);
   const example=await fetch('/api/examples/small').then(response=>response.json());
   document.querySelector('#request').value=JSON.stringify(example,null,2);populateForm(example);
+  updateCascade();
   document.querySelector('#submit').onclick=submit;
-  document.querySelector('#load-data').onclick=loadData;
+  document.querySelector('#prepare-map').onclick=prepareMap;
+  document.querySelector('#profile').onchange=()=>{loadedResult=null;updateCascade()};
+  document.querySelector('#sel-wojewodztwo').onchange=refreshPowiaty;
+  document.querySelector('#sel-powiat').onchange=refreshGminy;
   document.querySelector('#target-kind').onchange=toggleAnchorField;
-  document.querySelector('#snapshot').onchange=()=>{autoSelectScenario();loadReconstructionReport();const status=document.querySelector('#election-status');status.textContent=document.querySelector('#snapshot').value?'Wybory wybrane. Przejdź do kroku 2 i pokaż mapę.':''};
-  document.querySelector('#select-all').onclick=()=>{if(!loadedGraph)return;selectedNodes=new Set(loadedGraph.node_ids.map(String));redrawSelection();applySelectedArea()};
-  document.querySelector('#clear-selection').onclick=()=>{if(!loadedGraph)return;selectedNodes=new Set();redrawSelection();applySelectedArea()};
+  document.querySelector('#snapshot').onchange=()=>{autoSelectScenario();loadReconstructionReport();const status=document.querySelector('#election-status');status.textContent=document.querySelector('#snapshot').value?'Wybory wybrane. Przejdź do kroku 2.':''};
 }
 init().catch(error=>{document.querySelector('#health').textContent=`Błąd: ${error.message}`;document.querySelector('#system-banner').textContent=`Błąd: ${error.message}`});setInterval(load,5000);

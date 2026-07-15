@@ -109,11 +109,37 @@ def test_graph_cli_persists_versioned_api_compatible_payload(tmp_path, monkeypat
     assert payload["errors"] == []
     assert payload["build_parameters"] == {
         "key_column": "key",
+        "unit_level": "precinct",
         "metric_crs": 2180,
         "min_shared_border_m": 1.0,
         "boundary_tolerance_m": 0.01,
     }
     assert not output.with_suffix(".json.part").exists()
+
+
+def test_graph_cli_dissolves_gminy_into_powiat_nodes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.settings, "data_dir", tmp_path)
+    snapshot = SnapshotStore(tmp_path / "raw/snapshots").create(
+        "test-election", date(2026, 1, 1)
+    )
+    snapshot_root = tmp_path / "processed/snapshots" / str(snapshot.id)
+    snapshot_root.mkdir(parents=True)
+    source = snapshot_root / "gminy.gpkg"
+    output = snapshot_root / "graph.json"
+    gpd.GeoDataFrame(
+        {"teryt": ["020301", "020302", "020401"]},
+        geometry=[box(0, 0, 10, 10), box(10, 0, 20, 10), box(20, 0, 30, 10)],
+        crs=2180,
+    ).to_file(source, layer="gminy", driver="GPKG")
+
+    cli.graph_build(source, output, str(snapshot.id), unit_level="powiat")
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["node_ids"] == ["0203", "0204"]
+    assert payload["build_parameters"]["unit_level"] == "powiat"
+    assert [(edge["source"], edge["target"]) for edge in payload["edges"]] == [
+        ("0203", "0204")
+    ]
 
 
 def test_graph_cli_rejects_source_from_another_snapshot(tmp_path, monkeypatch):

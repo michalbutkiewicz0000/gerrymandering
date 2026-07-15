@@ -30,15 +30,34 @@
 
     <!-- KROK 2 -->
     <section class="step" id="step-2">
-      <div class="step-head"><span class="step-num">2</span><h2>Zaznacz obszar na mapie</h2></div>
-      <p class="step-help">Kliknij gminy/obwody, które chcesz analizować. Możesz zaznaczyć cały kraj albo tylko wybrany region. Zaznaczone obszary są zielone.</p>
-      <div class="actions">
-        <button id="load-data" type="button">Pokaż mapę i wybierz obszar</button>
-        <button id="select-all" type="button" class="ghost" disabled>Zaznacz wszystko</button>
-        <button id="clear-selection" type="button" class="ghost" disabled>Wyczyść</button>
-        <span id="load-data-status" class="inline-status"></span>
+      <div class="step-head"><span class="step-num">2</span><h2>Rodzaj wyborów i obszar</h2></div>
+      <p class="step-help">Wybierz ordynację. Program sam ustali właściwą jednostkę podziału: w wyborach do Sejmu, Senatu, PE i sejmiku okręgi buduje się z całych powiatów, więc nie da się dzielić powiatu — mapa pokazuje powiaty. W wyborach samorządowych wskaż konkretną jednostkę, a policzymy tylko ją.</p>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Rodzaj wyborów</span>
+          <select id="profile"></select>
+          <span class="field-hint" id="profile-hint"></span>
+        </label>
       </div>
-      <svg id="map" viewBox="0 0 1000 600" role="img" aria-label="Mapa wyboru obszaru"><text x="500" y="300" text-anchor="middle">Kliknij „Pokaż mapę”, aby wybrać obszar.</text></svg>
+      <div class="field-row" id="cascade" hidden>
+        <label class="field" id="field-wojewodztwo">
+          <span class="field-label">Województwo</span>
+          <select id="sel-wojewodztwo"><option value="">— wybierz —</option></select>
+        </label>
+        <label class="field" id="field-powiat" hidden>
+          <span class="field-label">Powiat</span>
+          <select id="sel-powiat"><option value="">— wybierz —</option></select>
+        </label>
+        <label class="field" id="field-gmina" hidden>
+          <span class="field-label">Gmina</span>
+          <select id="sel-gmina"><option value="">— wybierz —</option></select>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="prepare-map" type="button">Przygotuj mapę</button>
+        <span id="prepare-status" class="inline-status"></span>
+      </div>
+      <svg id="map" viewBox="0 0 1000 600" role="img" aria-label="Mapa jednostek podziału"><text x="500" y="300" text-anchor="middle">Wybierz rodzaj wyborów i kliknij „Przygotuj mapę”.</text></svg>
     </section>
 
     <!-- KROK 3 -->
@@ -89,10 +108,6 @@
         <summary>Opcje zaawansowane (dla ekspertów)</summary>
         <p class="step-help">Te pola są opcjonalne. Zmieniaj je tylko, jeśli wiesz, co robią.</p>
         <div class="field-row">
-          <label class="field">
-            <span class="field-label">Profil prawny</span>
-            <select id="profile"></select>
-          </label>
           <label class="field">
             <span class="field-label">Zestaw wyników (scenariusz)</span>
             <select id="scenario"><option value="">— automatyczny —</option></select>

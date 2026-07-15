@@ -3,7 +3,36 @@ import pytest
 from shapely.geometry import GeometryCollection, LineString, box
 
 from gerry.domain import AdjacencyEdge
-from gerry.graph import build_adjacency, contract, cut_border, validate_graph
+from gerry.graph import build_adjacency, contract, cut_border, dissolve_to_level, validate_graph
+
+
+def test_dissolve_to_level_unions_gminy_into_powiat_nodes():
+    # Two gminy of powiat 0203, one gmina of powiat 0204, plus a Warsaw district.
+    frame = gpd.GeoDataFrame(
+        {"teryt": ["020301", "020302", "020401", "146502"]},
+        geometry=[
+            box(0, 0, 10, 10),
+            box(10, 0, 20, 10),
+            box(20, 0, 30, 10),
+            box(30, 0, 40, 10),
+        ],
+        crs=2180,
+    )
+
+    powiat = dissolve_to_level(frame, "powiat")
+    assert sorted(powiat["key"]) == ["0203", "0204", "1465"]
+    # The two gminy of 0203 merged into a single 20x10 polygon.
+    assert powiat.set_index("key").loc["0203"].geometry.equals(box(0, 0, 20, 10))
+
+    edges = build_adjacency(powiat, boundary_tolerance_m=0)
+    assert [(edge.source, edge.target) for edge in edges] == [
+        ("0203", "0204"),
+        ("0204", "1465"),
+    ]
+
+    # Senate keeps the Warsaw district as its own node while collapsing the rest.
+    senate = dissolve_to_level(frame, "powiat", keep_gmina=frozenset({"146502"}))
+    assert sorted(senate["key"]) == ["0203", "0204", "146502"]
 
 
 def test_rook_adjacency_ignores_corner_contact():

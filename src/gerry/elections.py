@@ -6,11 +6,67 @@ from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 
 from .domain import VoteScenario
-from .sources import normalize_precinct, normalize_teryt
+from .sources import UNIT_LEVELS, node_key_for_teryt, normalize_precinct, normalize_teryt
+
+__all__ = [
+    "UNIT_LEVELS",
+    "aggregation_key",
+    "aggregate_scenario",
+    "scenario_from_pkw",
+    "allocate",
+    "dhondt",
+    "plurality",
+    "apply_thresholds",
+]
+
+
+def aggregation_key(unit_key: str, level: str, keep_gmina: frozenset[str] = frozenset()) -> str:
+    """Map a precinct key ``{teryt}_{precinct}`` to its node at ``level``.
+
+    A precinct key carries the 6-digit gmina TERYT before the underscore, which
+    :func:`gerry.sources.node_key_for_teryt` collapses to the gmina or powiat node;
+    ``keep_gmina`` forwards the Senate's Warsaw-split exception.
+    """
+    if level == "precinct":
+        return unit_key
+    return node_key_for_teryt(unit_key.split("_", 1)[0], level, keep_gmina)
+
+
+def aggregate_scenario(
+    scenario: VoteScenario, level: str, *, keep_gmina: frozenset[str] = frozenset()
+) -> VoteScenario:
+    """Sum a precinct scenario's votes, electors and population up to ``level``.
+
+    Boundaries never move votes between committees, so the aggregate is the exact
+    row-wise sum grouped by :func:`aggregation_key`. Returns the scenario unchanged
+    for the ``precinct`` level, otherwise a copy with a fresh id keyed at ``level``.
+    """
+    if level == "precinct":
+        return scenario
+    votes: defaultdict[str, defaultdict[str, int]] = defaultdict(lambda: defaultdict(int))
+    eligible: defaultdict[str, int] = defaultdict(int)
+    populations: defaultdict[str, int] = defaultdict(int)
+    for unit, row in scenario.votes_by_unit.items():
+        key = aggregation_key(unit, level, keep_gmina)
+        for party, value in row.items():
+            votes[key][party] += value
+    for unit, value in scenario.eligible_by_unit.items():
+        eligible[aggregation_key(unit, level, keep_gmina)] += value
+    for unit, value in scenario.population_by_unit.items():
+        populations[aggregation_key(unit, level, keep_gmina)] += value
+    return scenario.model_copy(
+        update={
+            "id": uuid4(),
+            "votes_by_unit": {key: dict(row) for key, row in votes.items()},
+            "eligible_by_unit": dict(eligible),
+            "population_by_unit": dict(populations),
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -88,12 +144,15 @@ def scenario_from_pkw(
     vote_columns: list[str] | None = None,
     thresholds: dict[str, float] | None = None,
     threshold_exempt: set[str] | None = None,
+    unit_level: str = "precinct",
 ) -> VoteScenario:
     """Import a wide PKW commission-results sheet into an auditable scenario.
 
     All numeric columns not recognized as metadata are treated as committee or
     candidate vote columns. Repeated commission rows are summed. An optional
     reconstruction attachment table moves non-territorial votes to host nodes.
+    With ``unit_level`` other than ``precinct`` the precinct rows are aggregated
+    up to gmina or powiat nodes, the granularity most elections actually model.
     """
     if path.suffix.lower() in {".xlsx", ".xls"}:
         frame = pd.read_excel(path, dtype=str)
@@ -196,7 +255,7 @@ def scenario_from_pkw(
         if population_column:
             value = pd.to_numeric(row[population_column], errors="coerce")
             populations[key] += 0 if pd.isna(value) else int(value)
-    return VoteScenario(
+    scenario = VoteScenario(
         name=name,
         votes_by_unit={key: dict(values) for key, values in votes.items()},
         eligible_by_unit=dict(eligible),
@@ -204,3 +263,4 @@ def scenario_from_pkw(
         thresholds=thresholds or {},
         threshold_exempt=threshold_exempt or set(),
     )
+    return aggregate_scenario(scenario, unit_level)

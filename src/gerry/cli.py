@@ -258,7 +258,25 @@ def graph_build(
     key_column: str = "key",
     min_border_m: float = 1.0,
     boundary_tolerance_m: float = 0.01,
+    unit_level: Annotated[
+        str,
+        typer.Option(
+            help="Poziom węzła: precinct (obwody), gmina lub powiat. "
+            "Dla gmina/powiat warstwa jest zlewana po kolumnie teryt."
+        ),
+    ] = "precinct",
+    keep_gmina: Annotated[
+        str,
+        typer.Option(
+            help="Kody TERYT gmin pozostawiane osobno na poziomie powiatu "
+            "(np. dzielnice Warszawy dla Senatu), rozdzielone przecinkami"
+        ),
+    ] = "",
 ) -> None:
+    from .sources import UNIT_LEVELS
+
+    if unit_level not in UNIT_LEVELS:
+        raise typer.BadParameter(f"unit-level musi być jednym z: {', '.join(UNIT_LEVELS)}")
     if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
         raise typer.BadParameter("Nie znaleziono migawki; najpierw użyj snapshot-create")
     snapshot_root = (settings.processed_dir / "snapshots" / snapshot_id).resolve()
@@ -269,6 +287,19 @@ def graph_build(
     if not resolved_output.is_relative_to(snapshot_root):
         raise typer.BadParameter("Graf wynikowy musi należeć do wskazanej migawki")
     frame = _read_geodata(source)
+    if unit_level != "precinct":
+        from .graph import dissolve_to_level
+
+        if "teryt" not in frame:
+            raise typer.BadParameter("Zlewanie do gmina/powiat wymaga kolumny teryt w warstwie")
+        frame = dissolve_to_level(
+            frame,
+            unit_level,
+            key_column=key_column,
+            keep_gmina=frozenset(
+                value.strip() for value in keep_gmina.split(",") if value.strip()
+            ),
+        )
     try:
         edges = build_adjacency(
             frame,
@@ -287,6 +318,7 @@ def graph_build(
         "errors": errors,
         "build_parameters": {
             "key_column": key_column,
+            "unit_level": unit_level,
             "metric_crs": 2180,
             "min_shared_border_m": min_border_m,
             "boundary_tolerance_m": boundary_tolerance_m,
@@ -423,8 +455,16 @@ def scenario_import(
     thresholds_json: str = "{}",
     exempt: str = "",
     vote_columns: str = "",
+    snapshot: Annotated[
+        str | None,
+        typer.Option(help="Powiąż scenariusz z migawką i udostępnij go w API/interfejsie"),
+    ] = None,
 ) -> None:
-    """Import a historical wide PKW result sheet; repeat for each election."""
+    """Import a historical wide PKW result sheet; repeat for each election.
+
+    With --snapshot the scenario is bound to that snapshot, aligned to its graph
+    nodes and registered so the API and the web wizard list it automatically.
+    """
     try:
         thresholds = json.loads(thresholds_json)
     except json.JSONDecodeError as exc:
@@ -435,8 +475,48 @@ def scenario_import(
         thresholds=thresholds,
         threshold_exempt={item.strip() for item in exempt.split(",") if item.strip()},
     )
+    if snapshot is not None:
+        _bind_scenario_to_snapshot(scenario, snapshot)
     _atomic_write_text(output, scenario.model_dump_json(indent=2))
     typer.echo(f"Jednostki: {len(scenario.votes_by_unit)}; zapisano {output}")
+    if snapshot is not None:
+        registered = _register_scenario(scenario)
+        typer.echo(f"Zarejestrowano scenariusz {scenario.id} dla migawki {snapshot}: {registered}")
+
+
+def _bind_scenario_to_snapshot(scenario, snapshot_id: str) -> None:
+    """Set the snapshot and drop vote units that are not nodes of its graph."""
+    from uuid import UUID
+
+    if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
+        raise typer.BadParameter("Nieznana migawka")
+    graph_path = settings.processed_dir / "snapshots" / snapshot_id / "graph.json"
+    if not graph_path.exists():
+        raise typer.BadParameter("Migawka nie ma zbudowanego grafu (uruchom graph-build)")
+    nodes = {str(node) for node in json.loads(graph_path.read_text(encoding="utf-8"))["node_ids"]}
+    missing = sorted(nodes - set(scenario.votes_by_unit))
+    if missing:
+        raise typer.BadParameter(f"Brak wyników PKW dla {len(missing)} obwodów, np. {missing[:5]}")
+    scenario.snapshot_id = UUID(snapshot_id)
+    scenario.votes_by_unit = {node: scenario.votes_by_unit[node] for node in nodes}
+    scenario.eligible_by_unit = {k: v for k, v in scenario.eligible_by_unit.items() if k in nodes}
+    scenario.population_by_unit = {k: v for k, v in scenario.population_by_unit.items() if k in nodes}
+
+
+def _register_scenario(scenario) -> Path:
+    """Write the scenario and its summary sidecar into the artifacts store."""
+    root = settings.artifacts_dir / "scenarios"
+    committees = {c for votes in scenario.votes_by_unit.values() for c in votes}
+    summary = {
+        "id": str(scenario.id),
+        "name": scenario.name,
+        "snapshot_id": str(scenario.snapshot_id) if scenario.snapshot_id else None,
+        "unit_count": len(scenario.votes_by_unit),
+        "committee_count": len(committees),
+    }
+    _atomic_write_text(root / f"{scenario.id}.json", scenario.model_dump_json(indent=2))
+    _atomic_write_text(root / "metadata" / f"{scenario.id}.json", json.dumps(summary, indent=2))
+    return root / f"{scenario.id}.json"
 
 
 @app.command("export")

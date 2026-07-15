@@ -33,6 +33,9 @@ profiles:
     requires_parent: "powiat/miasto na prawach powiatu"
     requires_container: "województwo"
     formal_boundaries: "załącznik nr 1 — poziom formalny"
+    unit_level: powiat
+    scope_level: null
+    container_level: wojewodztwo
   pl-senat@2026-07-15:
     method: plurality
     target_kinds: [committee, candidate]
@@ -46,6 +49,10 @@ profiles:
     population_ratio_min: 0.5
     population_ratio_max_exclusive: 2
     formal_boundaries: "załącznik nr 2 — poziom formalny"
+    unit_level: powiat
+    scope_level: null
+    container_level: null
+    split_population_gt: 500000
   pl-europarlament@2026-07-15:
     method: eu_poland
     target_kinds: [committee]
@@ -55,6 +62,9 @@ profiles:
     requires_parent: "powiat/miasto na prawach powiatu"
     requires_container: null
     formal_boundaries: "załącznik nr 3 — poziom formalny"
+    unit_level: powiat
+    scope_level: null
+    container_level: null
   pl-rada-gminy-do-20k@2026-07-15:
     method: plurality
     target_kinds: [committee, candidate]
@@ -65,6 +75,9 @@ profiles:
     requires_container: "gmina"
     parent_split_entitlement_gt: 1
     parent_merge_entitlement_lt: 1
+    unit_level: precinct
+    scope_level: gmina
+    container_level: gmina
   pl-rada-gminy-powyzej-20k@2026-07-15:
     method: dhondt
     target_kinds: [committee]
@@ -73,6 +86,9 @@ profiles:
     max_seats: 8
     requires_parent: null
     requires_container: "gmina"
+    unit_level: precinct
+    scope_level: gmina
+    container_level: gmina
   pl-rada-powiatu@2026-07-15:
     method: dhondt
     target_kinds: [committee]
@@ -83,6 +99,9 @@ profiles:
     requires_container: "powiat"
     parent_split_entitlement_gt: 10
     parent_merge_entitlement_lt: 3
+    unit_level: gmina
+    scope_level: powiat
+    container_level: powiat
   pl-sejmik@2026-07-15:
     method: dhondt
     target_kinds: [committee]
@@ -93,6 +112,9 @@ profiles:
     requires_container: "województwo"
     parent_split_entitlement_gt: 15
     parent_merge_entitlement_lt: 5
+    unit_level: powiat
+    scope_level: wojewodztwo
+    container_level: wojewodztwo
   generic-jow:
     method: plurality
     target_kinds: [committee, candidate]
@@ -101,6 +123,9 @@ profiles:
     max_seats: null
     requires_parent: null
     requires_container: null
+    unit_level: precinct
+    scope_level: null
+    container_level: null
   generic-proportional:
     method: dhondt
     target_kinds: [committee]
@@ -109,3 +134,6 @@ profiles:
     max_seats: null
     requires_parent: null
     requires_container: null
+    unit_level: precinct
+    scope_level: null
+    container_level: null

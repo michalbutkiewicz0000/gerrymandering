@@ -5,8 +5,47 @@ from collections.abc import Iterable
 
 import geopandas as gpd
 import networkx as nx
+import shapely
 
 from .domain import AdjacencyEdge
+from .reconstruction import polygonal_geometry
+from .sources import node_key_for_teryt
+
+
+def dissolve_to_level(
+    geometries: gpd.GeoDataFrame,
+    level: str,
+    *,
+    teryt_column: str = "teryt",
+    key_column: str = "key",
+    keep_gmina: frozenset[str] = frozenset(),
+) -> gpd.GeoDataFrame:
+    """Dissolve gmina or precinct polygons into powiat/gmina node polygons.
+
+    Each row's gmina TERYT is mapped to a node key with
+    :func:`gerry.sources.node_key_for_teryt`, geometries sharing a key are unioned,
+    and the result carries just that ``key_column`` and geometry — the exact layer
+    :func:`build_adjacency` and :func:`gerry.elections.aggregate_scenario` key on.
+    """
+    if teryt_column not in geometries:
+        raise ValueError(f"missing teryt column: {teryt_column}")
+    frame = geometries[[teryt_column, "geometry"]].copy()
+    # National PRG boundaries contain self-touching rings that make GEOS union
+    # throw a topology error; repair them before dissolving and coerce the merged
+    # result back to pure polygons so build_adjacency accepts it.
+    invalid = ~frame.geometry.is_valid
+    if invalid.any():
+        frame.loc[invalid, "geometry"] = frame.loc[invalid, "geometry"].map(
+            shapely.make_valid
+        )
+    frame[key_column] = frame[teryt_column].astype(str).map(
+        lambda teryt: node_key_for_teryt(teryt, level, keep_gmina)
+    )
+    dissolved = frame.dissolve(by=key_column).reset_index()
+    dissolved["geometry"] = [
+        polygonal_geometry(geometry) for geometry in dissolved.geometry
+    ]
+    return dissolved[[key_column, "geometry"]]
 
 
 def build_adjacency(
