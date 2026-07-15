@@ -1,0 +1,92 @@
+law_snapshot: 2026-07-15
+official_sources:
+  - "Dz.U. 2025 poz. 365 — tekst jednolity Kodeksu wyborczego — https://eli.gov.pl/eli/DU/2025/365/ogl"
+  - "Dz.U. 2025 poz. 1792 — zmiana terminologii rejestru TERYT — https://eli.gov.pl/eli/DU/2025/1792/ogl"
+  - "Dz.U. 2026 poz. 178 — zmiana dotycząca portalu poparcia; przepisy okręgowe bez zmian na dzień migawki — https://eli.gov.pl/eli/DU/2026/178/ogl"
+profiles:
+  pl-sejm@2026-07-15:
+    method: dhondt
+    target_kinds: [committee]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 193 oraz 201–203"
+    min_seats: 7
+    max_seats: null
+    total_seats: 460
+    requires_parent: "powiat/miasto na prawach powiatu"
+    requires_container: "województwo"
+    formal_boundaries: "załącznik nr 1 — poziom formalny"
+  pl-senat@2026-07-15:
+    method: plurality
+    target_kinds: [committee, candidate]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 260–261"
+    min_seats: 1
+    max_seats: 1
+    district_count: 100
+    requires_parent: "powiat (z wyjątkiem miasta >500 tys.)"
+    requires_container: "okręg sejmowy"
+    parent_split_population_gt: 500000
+    population_ratio_min: 0.5
+    population_ratio_max_exclusive: 2
+    formal_boundaries: "załącznik nr 2 — poziom formalny"
+  pl-europarlament@2026-07-15:
+    method: eu_poland
+    target_kinds: [committee]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 335, 340 i 356"
+    min_seats: null
+    max_seats: null
+    requires_parent: "powiat/miasto na prawach powiatu"
+    requires_container: null
+    formal_boundaries: "załącznik nr 3 — poziom formalny"
+  pl-rada-gminy-do-20k@2026-07-15:
+    method: plurality
+    target_kinds: [committee, candidate]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 415 oraz 417–419"
+    min_seats: 1
+    max_seats: 1
+    requires_parent: null
+    requires_container: "gmina"
+    parent_split_entitlement_gt: 1
+    parent_merge_entitlement_lt: 1
+  pl-rada-gminy-powyzej-20k@2026-07-15:
+    method: dhondt
+    target_kinds: [committee]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 416–419"
+    min_seats: 5
+    max_seats: 8
+    requires_parent: null
+    requires_container: "gmina"
+  pl-rada-powiatu@2026-07-15:
+    method: dhondt
+    target_kinds: [committee]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 450 oraz 453–455"
+    min_seats: 3
+    max_seats: 10
+    requires_parent: "gmina"
+    requires_container: "powiat"
+    parent_split_entitlement_gt: 10
+    parent_merge_entitlement_lt: 3
+  pl-sejmik@2026-07-15:
+    method: dhondt
+    target_kinds: [committee]
+    citation: "Kodeks wyborczy, Dz.U. 2025 poz. 365, art. 459 oraz 462–463"
+    min_seats: 5
+    max_seats: 15
+    requires_parent: "powiat"
+    requires_container: "województwo"
+    parent_split_entitlement_gt: 15
+    parent_merge_entitlement_lt: 5
+  generic-jow:
+    method: plurality
+    target_kinds: [committee, candidate]
+    citation: "profil analityczny — nie jest profilem prawa polskiego"
+    min_seats: null
+    max_seats: null
+    requires_parent: null
+    requires_container: null
+  generic-proportional:
+    method: dhondt
+    target_kinds: [committee]
+    citation: "profil analityczny — nie jest profilem prawa polskiego"
+    min_seats: null
+    max_seats: null
+    requires_parent: null
+    requires_container: null

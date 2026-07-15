@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Gerrymandering PL</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header><span class="eyebrow">ANALIZA WYBORCZA</span><h1>Gerrymandering PL</h1></header>
+  <main>
+    <section class="panel">
+      <h2>Status systemu</h2><p id="health">Łączenie…</p>
+      <dl id="capabilities"></dl>
+      <p class="notice">Stan prawa: 15.07.2026. Nowe warianty wymagają ustanowienia właściwym aktem.</p>
+    </section>
+    <section class="panel"><h2>Profile</h2><ul id="profiles"></ul></section>
+    <section class="panel wide">
+      <h2>Nowa optymalizacja</h2>
+      <p>Wybierz podstawowe parametry, a szczegóły grafu i scenariusza pozostają dostępne w JSON.</p>
+      <div class="form-grid">
+        <label>Migawka<select id="snapshot"><option value="">— wybierz —</option></select></label>
+        <label>Scenariusz<select id="scenario"><option value="">— wybierz —</option></select></label>
+        <label>Profil<select id="profile"></select></label>
+        <label>Rodzaj celu<select id="target-kind"><option value="committee">Komitet</option><option value="candidate">Kandydat (JOW)</option></select></label>
+        <label>Nazwa celu<input id="target" type="text"></label>
+        <label>Kotwica kandydata<input id="candidate-anchor" type="text" placeholder="np. 020302_1"></label>
+        <label>Liczba wariantów<input id="alternatives" type="number" min="1" max="50" value="10"></label>
+        <label>Liczba okręgów<input id="district-count" type="number" min="1" value="2"></label>
+        <label>Mandaty w okręgu<input id="seats" type="text" value="1" title="Liczba albo obiekt JSON"></label>
+        <label>Tolerancja ludności<input id="population-tolerance" type="number" min="0" max="0.999999" step="0.01" value="0.1"></label>
+        <label>Limit przeciętej granicy (m)<input id="max-cut-border" type="number" min="0" step="0.1" placeholder="bez limitu"></label>
+        <label>Dozwolone sąsiedztwo<select id="edge-kinds" multiple><option value="physical" selected>fizyczne</option><option value="bridge">most</option><option value="ferry">prom</option></select></label>
+      </div>
+      <div class="actions"><button id="load-data" type="button">Załaduj graf i scenariusz</button><span id="load-data-status"></span></div>
+      <textarea id="request" spellcheck="false"></textarea>
+      <div class="actions"><button id="submit">Uruchom dokładny solver</button><span id="submit-status"></span></div>
+    </section>
+    <section class="panel wide">
+      <h2>Jakość rekonstrukcji</h2>
+      <p>Podsumowanie wybranej migawki i pierwsza strona gmin wymagających uwagi.</p>
+      <div id="reconstruction-report">Wybierz migawkę.</div>
+    </section>
+    <section class="panel wide"><h2>Mapa planu</h2><svg id="map" viewBox="0 0 1000 600" role="img" aria-label="Mapa zoptymalizowanych okręgów"><text x="500" y="300" text-anchor="middle">Wybierz zakończone zadanie.</text></svg></section>
+    <section class="panel wide"><h2>Zadania optymalizacji</h2><div id="runs">Brak zadań.</div><article id="run-details"></article><article id="certificate-details"></article></section>
+  </main>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

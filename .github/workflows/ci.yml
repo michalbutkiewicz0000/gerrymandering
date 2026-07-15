@@ -1,0 +1,60 @@
+name: test-and-exact-image
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-24.04
+    services:
+      postgis:
+        image: postgis/postgis:16-3.5
+        env:
+          POSTGRES_DB: gerry_test
+          POSTGRES_USER: gerry
+          POSTGRES_PASSWORD: gerry
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gerry -d gerry_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      GERRY_TEST_POSTGRES_URL: postgresql+psycopg://gerry:gerry@localhost:5432/gerry_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e '.[dev,solver]'
+      - run: pytest -q
+      - run: ruff check .
+      - run: pip wheel --no-deps . -w dist
+
+  exact-docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: gerrymandering-pl:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify exact SCIP and VIPR are present
+        run: |
+          output="$(docker run --rm --entrypoint gerry gerrymandering-pl:test doctor)"
+          printf '%s\n' "$output"
+          grep -F "Solver exact: OK" <<<"$output"
+          grep -F "VIPR: OK" <<<"$output"
+          grep -F "Certyfikacja dużych zadań: OK" <<<"$output"
+          docker run --rm --entrypoint sh gerrymandering-pl:test -c \
+            'command -v viprcomp && command -v viprchk'
+      - name: Generate and verify an exact SCIP certificate
+        run: docker run --rm --entrypoint gerry gerrymandering-pl:test solver-smoke

@@ -1,0 +1,448 @@
+GERRYMANDERING PL — STATUS IMPLEMENTACJI
+Stan na: 15 lipca 2026 r.
+
+CEL PROJEKTU
+============
+
+Program ma automatycznie rekonstruować granice polskich obwodów głosowania,
+budować graf ich sąsiedztwa, importować historyczne wyniki i scenariusze,
+sprawdzać materialne oraz formalne reguły prawa wyborczego, a następnie
+wyznaczać najlepsze dla wskazanego komitetu lub — w wyborach JOW — kandydata
+spójne podziały na okręgi. Całość ma działać lokalnie przez Docker, API, CLI
+i interfejs WWW.
+
+
+1. CO JUŻ UDAŁO SIĘ ZROBIĆ
+==========================
+
+Fundament projektu
+------------------
+
+- Utworzono kompletną strukturę pakietu Python 3.12 w katalogu src/gerry.
+- Dodano konfigurację zależności i komendę `gerry` w pliku pyproject.toml.
+- Dodano konfigurację środowiska, katalogów danych i zamrożonego stanu prawa.
+- Dodano README, opis architektury, przykładowe żądanie optymalizacji oraz
+  konfigurację profili wyborczych.
+- Dodano migrację PostgreSQL/PostGIS i modele SQLAlchemy używane także
+  w testach SQLite. Fizyczna nazwa kolumny `geometry` jest zgodna z migracją,
+  a SQL jest zasobem pakietu, więc `gerry migrate` działa również po instalacji
+  wheel, w tym wewnątrz obrazu Docker.
+- Migracje są wykonywane kolejno i chronione transakcyjną blokadą doradczą,
+  dzięki czemu równolegle startujące API i worker nie wykonują DDL jednocześnie.
+- Klucz obwodu w PostGIS jest wersjonowany jako `(snapshot_id, key)`, a krawędzie
+  mają złożone klucze obce do obu końców w tej samej migawce. Ten sam numer
+  obwodu może więc bez konfliktu występować w wielu wyborach, a graf nie może
+  przypadkowo połączyć danych z dwóch migawek.
+- Artefakty oraz zadania są zapisywane atomowo w trwałych katalogach danych.
+
+Źródła i migawki danych
+-----------------------
+
+- Zaimplementowano migawki danych z datą, źródłem, ścieżką i sumą SHA-256.
+- Zaimplementowano import surowych danych z sąsiedniego projektu
+  `mapa_obwodow`, bez modyfikowania jego plików.
+- Zaimplementowano klienta oficjalnej usługi PRG WFS dla punktów adresowych.
+- Zaimplementowano klienta oficjalnych granic administracyjnych PRG oraz
+  obsługę granic gmin, rejonów statystycznych i obwodów spisowych.
+- Dodano lokalny cache pobranych danych PRG i ponawianie nieudanych zapytań.
+- Zaimplementowano odczyt rejestrów PKW z XLS/XLSX i CSV oraz normalizację
+  nazw kolumn, TERYT i numerów obwodów.
+
+Rekonstrukcja obwodów
+---------------------
+
+- Przeniesiono i włączono rozbudowany parser opisów granic z projektu
+  `mapa_obwodow`.
+- Parser obsługuje m.in. ulice, miejscowości, zakresy numerów, parzystość,
+  listy i typowe warianty zapisu spotykane w danych PKW.
+- Zaimplementowano przypisywanie punktów adresowych PRG do obwodów.
+- Zaimplementowano automatyczne tworzenie pełnego, bezlukowego podziału gminy
+  metodą ograniczonych diagramów Voronoi.
+- Każdy obwód terytorialny otrzymuje geometrię także wtedy, gdy parser nie
+  znalazł dla niego adresu; taki przypadek jest oznaczany jako fallback.
+- Powstają raporty jakości: liczba adresów, odsetek przypisań, konflikty,
+  pokrycie, nakładanie geometrii i użyte fallbacki.
+- Pipeline iteruje po wszystkich kodach TERYT rejestru. Brak granicy
+  administracyjnej nie powoduje już cichego pominięcia gminy, lecz jawny wpis
+  `MissingBoundary` w atomowo zapisanym raporcie krajowym.
+- Przebieg krajowy zapisuje postęp po każdej gminie, obsługuje wybór kodów TERYT,
+  `--force` i `--retry-failed`. Ponowienie błędów zachowuje wcześniejsze sukcesy,
+  składa warstwę krajową ze wszystkich plików cache i ustawia `complete_country`
+  dopiero po obecności wszystkich gmin bez błędu.
+- Obwody odrębne (np. szpitale, zakłady karne, DPS) nie stają się węzłami
+  grafu. Są automatycznie przypisywane do obwodu zawierającego lokal komisji,
+  a w razie braku trafienia — do najbliższego obwodu.
+- Pipeline tworzy pliki dla poszczególnych gmin oraz połączoną warstwę krajową
+  `data/processed/snapshots/<snapshot_id>/precincts.parquet` i
+  `precincts.gpkg`. Publiczne API/CLI wymaga istniejącej migawki, więc cache
+  kolejnych wyborów nie może zostać pomylony.
+- Wykonano próbę na rzeczywistych danych TERYT 020101 z cache projektu
+  `mapa_obwodow`: utworzono 21 z 21 oczekiwanych obwodów, przypisano ok. 95,64%
+  adresów, uzyskano pełne pokrycie bez nakładania oraz dołączono 3 z 3 obwodów
+  odrębnych.
+- Odczyt całego rzeczywistego rejestru wykrył 31 497 rekordów, 2 495 kodów
+  TERYT oraz 1 766 obwodów odrębnych.
+- Ponowna próba TERYT 020101 potwierdziła, że wszystkie 21 poligonów zawiera
+  przeniesione pola ludności, liczby uprawnionych i jakości geometrii.
+- Dodano powtarzalną komendę `gerry real-smoke`. Pełny przebieg dla rzeczywistej
+  gminy TERYT 020302 wykonał rekonstrukcję, graf, import Sejm 2023, walidację,
+  solver wyczerpujący, weryfikację certyfikatu i eksport GeoJSON. Wynik: 4/4
+  obwody, 100% przypisania adresów, 4 krawędzie, brak błędów grafu, 12 komitetów,
+  `OPTIMAL`, 2 alternatywy i zweryfikowany certyfikat.
+
+Graf sąsiedztwa
+---------------
+
+- Zaimplementowano graf typu rook adjacency: sąsiedztwo wymaga wspólnego
+  odcinka granicy, a samo zetknięcie w punkcie nie wystarcza.
+- Domyślny minimalny wspólny odcinek wynosi 1 metr.
+- Krawędzie przechowują długość wspólnej granicy oraz typ: fizyczny, most
+  albo prom.
+- Dodano walidację nieznanych węzłów, duplikatów i spójności grafu.
+- Artefakt grafu przechowuje pełne `node_ids`, w tym węzły izolowane, a nie
+  wyłącznie liczbę węzłów i końce istniejących krawędzi. API odrzuca starszy
+  format i wymaga ponownego zbudowania grafu.
+- Budowa grafu odrzuca brak CRS, brak/duplikaty kluczy oraz puste i niepoprawne
+  geometrie przed zapisaniem artefaktu.
+- Dodano kontrakcję grafu do jednostek nadrzędnych oraz obliczanie długości
+  granic przeciętych przez plan.
+
+Wyniki historyczne i scenariusze
+--------------------------------
+
+- Zaimplementowano model scenariusza z głosami, liczbą uprawnionych,
+  populacją, progami i zwolnieniami z progów.
+- Dodano API do zapisu i odczytu scenariuszy.
+- Dodano importer szerokich arkuszy wyników PKW (XLS/XLSX/CSV).
+- Importer potrafi jawnie przyjąć listę kolumn komitetów lub kandydatów.
+- Głosy i liczba uprawnionych z obwodów odrębnych są sumowane do wskazanego
+  terytorialnego gospodarza.
+- Dodano komendę CLI `gerry scenario-import`; można nią importować kolejne
+  wybory historyczne i tworzyć własne warianty danych.
+- Importer obsługuje bezpośrednio archiwa ZIP PKW, BOM i rzeczywiste warianty
+  nagłówków `Nr komisji` oraz `TERYT Gminy`. Próba na pełnym archiwum Sejm 2023
+  odczytała 31 073 komisje i 12 kolumn komitetów; komisja 020101_1 dała
+  1605 uprawnionych oraz 1166 głosów na listy, zgodnie z plikiem źródłowym.
+- Przy automatycznym imporcie oficjalnego arkusza kolumny zaczynające się od
+  `KOMITET WYBORCZY` lub `KOALICYJNY KOMITET WYBORCZY` są oddzielane od
+  liczbowych pól frekwencji. Pusty raport przyłączeń `[]` jest poprawnie
+  rozpoznawany jako brak obwodów odrębnych.
+
+Arytmetyka wyborcza
+-------------------
+
+- Zaimplementowano większość względną i metodę D’Hondta.
+- Ilorazy D’Hondta i sprawdzanie progów używają liczb wymiernych, a nie
+  przybliżeń zmiennoprzecinkowych.
+- Remisy mają deterministyczną, udokumentowaną regułę analityczną.
+- Obsłużono progi krajowe oraz komitety zwolnione z progu.
+- Dla wyborów do Parlamentu Europejskiego program rozpoznaje, że łączna liczba
+  mandatów komitetu jest ustalana krajowo i nie zależy od granic okręgów.
+
+Walidacja prawna
+----------------
+
+- Dodano profile dla Sejmu, Senatu, Parlamentu Europejskiego, rad gmin do
+  20 tys. mieszkańców, rad gmin powyżej 20 tys., rad powiatów i sejmików.
+- Dodano osobne profile analityczne generic-jow i generic-proportional.
+- Walidator sprawdza pokrycie wszystkich jednostek, liczbę okręgów, spójność,
+  normę ludności, limity mandatów, niepodzielność jednostek nadrzędnych,
+  dozwolony kontener i opcjonalny limit przeciętych granic.
+- Brak danych potrzebnych do kontroli reguły daje UNVERIFIABLE zamiast
+  nieuzasadnionego COMPLIANT.
+- Oddzielono zgodność materialną od zgodności z obowiązującym aktem.
+- Plan zgodny z przekazaną mapą bazową jest rozpoznawany niezależnie od numerów
+  okręgów. Zmieniony plan otrzymuje REQUIRES_ENACTMENT, ale obowiązujące granice
+  nie są sztucznie używane jako ograniczenie optymalizatora.
+- Stan prawa jest zamrożony na 15 lipca 2026 r.; podstawą jest m.in. tekst
+  jednolity Kodeksu wyborczego Dz.U. 2025 poz. 365 wraz ze stanem sprawdzonym
+  dla wydania programu.
+- Profile prawne mają jedno źródło YAML dołączane do paczki Python. Raport
+  zawiera SHA-256 dokładnie tej konfiguracji i listę uwzględnionych oficjalnych
+  aktów: Dz.U. 2025 poz. 365 i 1792 oraz Dz.U. 2026 poz. 178.
+- Zaimplementowano ustawowe wyjątki dotyczące dzielenia i łączenia gmin lub
+  powiatów zależnie od normy mandatowej, wyjątek miasta powyżej 500 tys.
+  mieszkańców w wyborach do Senatu, przedział senackiej normy ludności oraz
+  łączną liczbę 460 mandatów w wyborach do Sejmu.
+
+Dokładna optymalizacja
+----------------------
+
+- Dla grafów do 14 węzłów działa niezależny solver wyczerpujący.
+- Solver usuwa symetrię numerów okręgów, bada wszystkie kanoniczne podziały,
+  waliduje każdy plan i dowodzi optimum albo braku rozwiązania.
+- Kolejność celów jest leksykograficzna: mandaty celu, maksymalne odchylenie
+  ludności, liczba zmienionych jednostek, długość przeciętych granic i łączne
+  odchylenie ludności.
+- Mały solver generuje alternatywne plany o tym samym najlepszym wyniku.
+- Certyfikat małego solvera zawiera całe żądanie, liczbę sprawdzonych podziałów,
+  wynik i sumę integralności. Weryfikator ponownie wykonuje całe wyczerpanie,
+  zamiast sprawdzać wyłącznie hash pliku.
+- Dla większych grafów przygotowano model MIP SCIP z:
+  * dokładnie jednym okręgiem na jednostkę,
+  * przepływowym dowodem spójności każdego okręgu,
+  * ograniczeniami ludności,
+  * niepodzielnością rodziców i kontenerami,
+  * celem JOW dla komitetu lub zakotwiczonego kandydata,
+  * dokładnym kodowaniem wyboru ilorazów D’Hondta przez całkowite porównania
+    krzyżowe,
+  * kolejnymi dokładnymi etapami celu leksykograficznego,
+  * alternatywnymi planami o tym samym kompletnym wyniku leksykograficznym.
+- Program sprawdza realne możliwości podłączonej biblioteki SCIP. Sam numer
+  wersji albo plik modelu `.cip` nie są już błędnie nazywane certyfikatem.
+- Przygotowano manifest certyfikatu z oddzielnym dowodem VIPR dla każdego etapu
+  celu i każdej opublikowanej alternatywy.
+- Dodano niezależny weryfikator trwałego manifestu: ponownie oblicza SHA-256
+  żądania, każdego CIP i każdego dowodu, pilnuje lokalizacji artefaktów oraz na
+  żądanie ponownie uruchamia `viprchk` (`gerry certificate-verify`).
+- Status OPTIMAL dla dużego zadania wymaga trybu EXACTSOLVE i pozytywnego
+  przejścia zewnętrznych narzędzi viprcomp oraz viprchk.
+
+API, CLI, interfejs i eksport
+-----------------------------
+
+- FastAPI udostępnia healthcheck, profile, listy migawek i scenariuszy,
+  rekonstrukcję, budowę/odczyt grafu, walidację planu, kolejkę optymalizacji,
+  anulowanie, bezpieczny odczyt manifestu certyfikatu i eksport.
+- Lista zadań optymalizacyjnych jest stronicowana (`limit` 1–200 i `offset`),
+  sortowana od najnowszych i realizowana po stronie PostGIS albo repozytorium
+  plikowego. Interfejs pobiera ograniczoną stronę zamiast całej historii.
+- Dokumentacja OpenAPI jest dostępna pod `/docs`.
+- CLI udostępnia m.in. doctor, solver-smoke, real-smoke, certificate-verify,
+  migrate, snapshot-create,
+  import-mapa-obwodow, reconstruct, graph-build, scenario-import, optimize,
+  export i worker.
+- API i CLI korzystają z tych samych modeli oraz serwisów domenowych.
+- Interfejs WWW zawiera profil prawa, wybór migawki i scenariusza, ładowanie
+  kompletnego grafu, edytor żądania JSON, listę zadań, anulowanie, automatyczne
+  odświeżanie, mapę wyniku, porównanie alternatyw, linki do pięciu formatów
+  eksportu i panel etapów oraz sum kontrolnych certyfikatu.
+- Mapa planu jest renderowana bezpośrednio z GeoJSON jako lokalny SVG. Nie
+  wymaga MapLibre, kafli OSM ani dostępu do CDN; obsługuje Polygon,
+  MultiPolygon i otwory oraz nie przepełnia stosu przy dużej liczbie punktów.
+- Typowy wariant można skonfigurować formularzem: liczba okręgów i mandatów,
+  tolerancja ludności, limit przeciętej granicy, typy dozwolonych krawędzi oraz
+  kotwica kandydata. Edytor JSON pozostaje dla map mandatów i reguł specjalnych.
+- Dodano eksport JSON, CSV, GeoJSON, GeoPackage i raportu HTML.
+
+Docker
+------
+
+- Dodano Docker Compose z usługami PostGIS, API i osobnym workerem.
+- Dodano wspólny wolumen danych i healthcheck bazy.
+- Dockerfile ma wieloetapowo budować przypięte wersje:
+  SCIP 10.0.2, SoPlex 8.0.2, PySCIPOpt 6.2.1 i VIPR.
+- Konfiguracja kompilacji wymusza EXACTSOLVE z GMP, MPFR, Boost i dokładnym
+  SoPlexem; budowa obrazu kończy się błędem, jeżeli test możliwości exact
+  nie przejdzie.
+- Konfiguracja `docker compose config` została zweryfikowana.
+
+Testy i jakość
+--------------
+
+- Utworzono testy parsera, rekonstrukcji, grafu, arytmetyki wyborczej,
+  walidatora, obu solverów, importera wyników, API, bazy i eksportu.
+- Przeniesiono 26 testów regresyjnych parsera z projektu `mapa_obwodow`.
+- Aktualny wynik lokalny: 101 testów zakończonych powodzeniem i 3 testy
+  integracyjne pominięte: jeden SCIP/VIPR, ponieważ standardowe koło PyPI nie
+  zawiera EXACTSOLVE, oraz dwa PostGIS wykonywane przez CI z prawdziwą usługą.
+  Sama
+  formulacja SCIP dla JOW i D’Hondta jest wykonywana w testach bez certyfikacji;
+  osobny test pilnuje, że taki wynik pozostaje FEASIBLE_CHECKPOINT.
+- Dodano deterministyczne porównanie SCIP z enumeratorem-oraklem na losowych
+  grafach JOW i D’Hondta dla pełnego celu leksykograficznego. Audyt wykrył i
+  naprawił redukcję symetrii etykiet przy `base_assignment` lub różnej liczbie
+  mandatów per okręg; w tych przypadkach numer okręgu jest semantyczny.
+- Ruff kończy się wynikiem `All checks passed!`.
+- `git diff --check` nie wykrywa błędów białych znaków.
+- Testy są odizolowane od kontenerowych ścieżek zapisanych w lokalnym `.env`.
+- Dodano workflow CI: testy i budowa paczki Python oraz osobna, maksymalnie
+  90-minutowa budowa obrazu exact. Bramka sprawdza `Solver exact: OK`,
+  `viprcomp` i `viprchk` wewnątrz gotowego obrazu.
+- Obraz Docker z własnym SCIP 10.0.2 EXACTSOLVE, SoPlex 8.0.2 i VIPR został
+  zbudowany i uruchomiony. `gerry doctor` potwierdził gotowość całego stosu.
+- Test odbiorczy dużego solvera potwierdził oba rodzaje dowodów: wykonalny
+  przypadek zakończył się `OPTIMAL; certyfikat: zweryfikowany`, a przypadek
+  sprzeczny `INFEASIBLE; certyfikat: zweryfikowany`.
+- Końcowy odbiór został wykonany ponownie po dodaniu manifestu v2; oba statusy
+  pozostały zweryfikowane, co potwierdza, że finalny obraz odrzuca stary lub
+  niekompletny kontrakt dowodowy.
+- Najnowszy obraz, zawierający również migrację kluczy migawkowych, endpointy
+  grafu/certyfikatu i rozbudowany interfejs, został ponownie zbudowany. Migracja
+  zakończyła się komunikatem `Schemat bazy jest aktualny`, `/ready` zwrócił
+  `{"status":"ready"}`, a oba certyfikowane przypadki smoke ponownie przeszły.
+- Manifest VIPR w wersji 2 wiąże każdy etap leksykograficzny z nazwą, właściwym
+  modelem CIP i osobnymi sumami SHA-256 modelu oraz dowodu. Zawiera również
+  SHA-256 pełnego żądania. `solver-smoke` odrzuca starszy lub niepełny manifest.
+- Dodano wspólną walidację kontraktu API/CLI: ujemne dane wyborcze, niepoprawna
+  konfiguracja mandatów, duplikaty węzłów/krawędzi i odwołania do nieznanych
+  węzłów są odrzucane przed uruchomieniem workera.
+- Graf tworzony przez CLI ma ten sam wersjonowany format co graf API, a jego
+  źródło i wynik muszą należeć do wskazanej migawki. Scenariusze, grafy,
+  wyniki CLI i wszystkie formaty eksportu są zapisywane atomowo.
+- Kontrolny wheel został ponownie zbudowany i sprawdzony: zawiera najnowsze API,
+  CLI, solver, obie migracje SQL, profile, przykład oraz cały interfejs WWW.
+- Test `test_real_municipality_end_to_end` korzysta z lokalnych niezmienianych
+  danych `mapa_obwodow` i automatycznie potwierdza cały rzeczywisty przepływ
+  TERYT 020302. W CI bez tego opcjonalnego zbioru jest jawnie pomijany.
+- Test wznowienia potwierdza, że `--retry-failed` nie nadpisuje kraju samym
+  podzbiorem, zachowuje poprzednie gminy i prawidłowo finalizuje manifest.
+- Test interfejsu pilnuje, że mapa pozostaje samowystarczalna i nie przywraca
+  zależności od MapLibre, OpenStreetMap ani zewnętrznych adresów HTTPS.
+
+
+2. CO JEST OBECNIE W TRAKCIE
+============================
+
+- Końcowy audyt zgodności implementacji z pełnym zakresem ustalonego planu.
+- Wykonanie dwóch nowych testów integralności na prawdziwym PostGIS:
+  powtarzalność
+  kluczy obwodów między migawkami i zakaz krawędzi między migawkami.
+- Odbiór `real-smoke` wewnątrz najnowszego obrazu z danymi źródłowymi
+  zamontowanymi wyłącznie do odczytu.
+- Rozszerzanie testów integracyjnych dużego solvera oraz alternatywnych planów.
+- Uzupełnianie dokumentacji przepływu od danych PKW/PRG do gotowego raportu.
+- Dalsza kontrola profili prawnych względem oficjalnego tekstu ELI i reguł,
+  których nie da się sprowadzić do prostego limitu liczbowego.
+
+
+3. CO JESZCZE JEST PRZED NAMI
+=============================
+
+Wymagane przed uznaniem programu za kompletny
+---------------------------------------------
+
+1. Uruchomić krajowy pipeline na wszystkich 2 495 jednostkach TERYT. Kod jest
+   przygotowany, ale operacja wymaga pobrania dużej ilości danych PRG i może
+   trwać wiele godzin. Należy zachować raporty błędów i ponowić brakujące gminy.
+
+2. Zweryfikować profile prawne z ekspertem wyborczym. Obecny walidator obejmuje
+   główne reguły strukturalne, lecz szczególne wyjątki ustawowe (np. warunkowe
+   łączenie lub dzielenie gmin, szczególne zasady dużych miast i wyznaczanie
+   normy przedstawicielstwa) wymagają dodatkowych danych oraz bardziej
+   szczegółowych reguł. Program prawidłowo oznacza brak danych jako
+   UNVERIFIABLE, ale nie należy przedstawiać wyniku jako opinii prawnej.
+   Audyt ELI potwierdził użyte przepisy graniczne i dodał trwałe odnośniki ELI
+   do raportów. Konfigurowana tolerancja ludności jest teraz jawnie opisana jako
+   ograniczenie analityczne, a nie ustawowy algorytm normy przedstawicielstwa.
+
+3. Rozszerzyć integrację PostGIS z kolejki na wszystkie duże geometrie i
+   migawki. Kolejka optymalizacji używa już w Dockerze transakcyjnego
+   `FOR UPDATE SKIP LOCKED`, więc wiele workerów nie przejmie tego samego
+   zadania. Backend plikowy pozostał dla prostego trybu lokalnego. Geometrie
+   rekonstrukcji i część artefaktów nadal są przechowywane jako Parquet/GPKG
+   na wolumenie i przed rozproszonym wdrożeniem powinny trafić do PostGIS.
+
+4. Dokończyć interfejs WWW ponad wdrożony wybór migawki/scenariusza, mapę,
+   porównanie alternatyw, eksporty i panel certyfikatu: pozostają formularz
+   wszystkich reguł bez edycji JSON, wybór obszaru bezpośrednio na mapie oraz
+   podgląd raportów jakości rekonstrukcji.
+
+5. Dodać kontrolowane wznawianie przerwanych zadań SCIP. Sygnał anulowania
+    jest już przekazywany do aktywnego enumeratora i przez handler zdarzeń do
+    SCIP, a anulowany wynik nie jest publikowany. Pozostaje zapis i odtworzenie
+    pełnego stanu drzewa wyszukiwania po restarcie procesu.
+
+6. Zarchiwizować lokalne kopie pełnych tekstów aktów obok profilu prawnego.
+    Każdy raport zawiera już datę migawki, SHA-256 wykonywalnego profilu oraz
+    listę oficjalnych źródeł (Dz.U. 2025 poz. 365 i 1792 oraz Dz.U. 2026
+    poz. 178). Do pełnej archiwizacji offline pozostaje dołączenie samych PDF.
+
+7. Wykonać końcowy test obciążeniowy API i pamięci. Warstwa krajowa i model MIP
+    mogą być bardzo duże; potrzebne są pomiary, limity zasobów i stronicowanie
+    dużych raportów bez zmniejszania dokładności samej optymalizacji. Lista
+    zadań ma już walidowane stronicowanie w API i obu backendach.
+
+
+4. AKTUALNE OGRANICZENIA I WAŻNE UWAGI
+======================================
+
+- Automatyczna geometria jest rekonstrukcją, a nie oficjalną granicą obwodu.
+  Pełne pokrycie nie oznacza stuprocentowej zgodności z rzeczywistością.
+- Standardowe koło PySCIPOpt 6.2.1 z PyPI zawiera SCIP 10.0.2, ale zostało
+  skompilowane bez EXACTSOLVE. Lokalny `gerry doctor` wykrywa ten stan i duży
+  solver odmawia fałszywego certyfikowania wyniku.
+- Dokładny solver nie ma limitu czasu zgodnie z założeniem projektu. Dla dużych
+  danych obliczenia mogą trwać bardzo długo albo praktycznie się nie zakończyć.
+- Alternatywy SCIP mają obecnie ten sam pełny wynik leksykograficzny co plan
+  główny. Jeśli takich planów nie ma, lista może być krótsza od żądanej.
+- Kandydat może być celem tylko w profilach JOW i wymaga wskazania jednostki
+  zakotwiczenia. W profilach proporcjonalnych optymalizowany jest komitet.
+- Narzędzie służy do analizy wariantów. Wynik strukturalnie zgodny nadal może
+  wymagać ustanowienia właściwym aktem i niezależnej kontroli prawnej.
+
+
+5. NAJBLIŻSZY PRAKTYCZNY KROK
+=============================
+
+Pierwsza próba budowy obrazu dotarła do konfiguracji SCIP 10.0.2 i wykazała
+brak nagłówków Readline. Dockerfile został poprawiony: etap kompilacji zawiera
+teraz `libreadline-dev` i `libncurses-dev`, a obraz uruchomieniowy `libreadline8`.
+Kolejna próba doszła do instalacji aplikacji i wykazała brak katalogów
+`frontend`/`examples` w kontekście etapu wheel. Dockerfile kopiuje je teraz
+przed `pip install`, dzięki czemu konfiguracja `force-include` Hatch działa.
+Następna próba potwierdziła załadowanie własnego SCIP 10.0.2, lecz wykazała,
+że PySCIPOpt tworzy pusty problem już w konstruktorze. Probe i solver zwalniają
+teraz ten problem, włączają EXACTSOLVE w wymaganym stanie INIT, a następnie
+ładują sformułowany wcześniej model CIP. Test uruchomionego kontenera wykazał,
+że PySCIPOpt nie udostępnia dokładnego odpowiednika `addVar`; solver został
+więc rozdzielony na model konstrukcyjny i świeży model exact dla każdego etapu
+leksykograficznego. Reader SCIP tworzy z CIP dokładne dane racjonalne przed
+rozwiązaniem i wygenerowaniem dowodu.
+Pierwszy pełny przebieg rozwiązał wszystkie cztery etapy exact, ale VIPR
+odrzucił etap granicy na wierszu wygenerowanym przez presolve SCIP. Exact stage
+wyłącza teraz presolve i separację, przekazuje udowodnione ograniczenia między
+etapami bezpośrednio jako dokładne granice zmiennych, a każdy model uruchamia
+w osobnym procesie. Proces serializuje wynik do JSON i kończy się po bezpiecznym
+zwolnieniu problemu, co usuwało również błąd destruktora PySCIPOpt.
+Finalny obraz dodaje `/opt/scip/bin` do `PATH` i kończy build błędem, jeżeli
+nie odnajdzie `viprcomp` lub `viprchk`. Komenda `gerry solver-smoke` wymusza
+pełny przebieg SCIP→VIPR na małym modelu; jest wykonywana przez CI i służy do
+odbioru uruchomionego kontenera.
+Pierwsze uruchomienie stosu potwierdziło zdrowy PostGIS, działające API i worker
+oraz `Solver exact: OK`, `VIPR: OK`. Dodano endpoint `/ready`, który sprawdza
+rzeczywisty backend kolejki, oraz healthcheck API w Compose.
+Naprawiono też ścieżkę migracji w zainstalowanym pakiecie; kontrolny wheel
+zawiera migrację SQL, profil prawny, przykład API i kompletny interfejs. Test
+zainstalowanego wheel potwierdza dostępność tych zasobów. `gerry doctor`
+raportuje osobno SCIP, VIPR i pełną gotowość certyfikacji. CI uruchamia również
+  migrację i kolejkę na PostGIS 16/3.5. Po tych zmianach pełne testy Pythona,
+  Ruff, `docker compose config`, kontrola JavaScriptu i `git diff --check`
+  przechodzą.
+
+Odbiór obrazu zawierającego manifest VIPR v2, bez bind mountu, zakończył się
+pełnym sukcesem:
+
+    Status: OPTIMAL; certyfikat: zweryfikowany
+    Brak rozwiązania: INFEASIBLE; certyfikat: zweryfikowany
+
+Po wcześniejszym odbiorze audyt dodał niezależną komendę `certificate-verify`, migrację
+złożonych kluczy PostGIS, pełne identyfikatory grafu, raportowanie brakujących
+granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 101 testów
+lokalne, Ruff, kontrolę Compose, JavaScriptu i diff. Najnowszy obraz został
+zbudowany i przeszedł pełną bramkę odbiorczą:
+
+    cd /home/michal/PycharmProjects/gerrymandering
+    Schemat bazy jest aktualny.
+    Certyfikacja dużych zadań: OK
+    Status: OPTIMAL; certyfikat: zweryfikowany
+    Brak rozwiązania: INFEASIBLE; certyfikat: zweryfikowany
+    {"status":"ready"}
+
+Ścieżka obrazu, migracji, API/worker oraz certyfikacji exact jest zweryfikowana.
+Rzeczywisty test end-to-end TERYT 020302 jest zakończony i powtarzalny przez:
+
+    gerry real-smoke ../mapa_obwodow --teryt 020302
+
+Najnowszy obraz zawierający poprawkę importera, `real-smoke`, kontrolowane
+wznowienie kraju i formularz WWW został zbudowany i uruchomiony. Mapa planu
+działa teraz również całkowicie offline jako SVG; ta ostatnia zmiana przeszła
+lokalne testy i wymaga jedynie kolejnego zwykłego rebuilda obrazu. Odbiór
+rzeczywistego przepływu wewnątrz obrazu wykonuje:
+
+    docker compose run --rm --no-deps \
+      -v "$PWD/../mapa_obwodow:/fixtures:ro" \
+      worker gerry real-smoke /fixtures --teryt 020302
+
+Po tej próbie następnym krokiem jest kontrolowany przebieg krajowy opisany
+w sekcji 3, rozpoczynany bez `--limit` i wznawiany przez `--retry-failed`.

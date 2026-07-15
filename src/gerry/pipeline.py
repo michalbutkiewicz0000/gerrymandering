@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Iterable
+from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+from shapely.geometry import Point
+
+from .pkw_parser import parse_opis_granic, resolve_obwod
+from .reconstruction import attach_special_precincts, normalize_text, reconstruct_voronoi
+from .sources import AdministrativeBoundaryClient, PrgClient, load_registry
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".part")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def assign_with_pkw_parser(addresses: gpd.GeoDataFrame, registry: pd.DataFrame) -> gpd.GeoDataFrame:
+    rules = [
+        parse_opis_granic(int(row.precinct), str(row.area_type), str(row.description))
+        for row in registry.itertuples()
+    ]
+    assigned = addresses.copy()
+    results = [
+        resolve_obwod(
+            rules,
+            getattr(row, "street", ""),
+            getattr(row, "number", None),
+            getattr(row, "miejscowosc", ""),
+        )
+        for row in assigned.itertuples()
+    ]
+    assigned["precinct"] = pd.array([result[0] for result in results], dtype="Int64")
+    assigned["match_count"] = [result[1] for result in results]
+    return assigned
+
+
+class NationalReconstructionPipeline:
+    def __init__(
+        self, data_dir: Path, prg: PrgClient | None = None, *, snapshot_id: str | None = None
+    ):
+        self.data_dir = data_dir
+        self.prg = prg or PrgClient()
+        self.snapshot_id = str(snapshot_id) if snapshot_id is not None else None
+        self.address_cache = data_dir / "raw" / "prg"
+        processed_root = data_dir / "processed"
+        self.report_dir = data_dir / "artifacts" / "reconstruction"
+        if self.snapshot_id:
+            processed_root = processed_root / "snapshots" / self.snapshot_id
+            self.report_dir = self.report_dir / self.snapshot_id
+        self.processed_root = processed_root
+        self.output_dir = processed_root / "precincts"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+
+    def reconstruct_gmina(
+        self, teryt: str, registry: pd.DataFrame, boundary, *, force: bool = False
+    ) -> tuple[gpd.GeoDataFrame, dict]:
+        output = self.output_dir / f"{teryt}.parquet"
+        report_path = self.report_dir / f"{teryt}.json"
+        if output.exists() and report_path.exists() and not force:
+            return gpd.read_parquet(output), json.loads(report_path.read_text(encoding="utf-8"))
+        subset = registry[(registry.teryt == teryt) & ~registry.special].copy()
+        if subset.empty:
+            raise ValueError(f"Brak terytorialnych obwodów dla {teryt}")
+        addresses = self.prg.fetch(teryt, self.address_cache)
+        assigned = assign_with_pkw_parser(addresses, subset)
+        fallback_points = self._fallback_points(subset, assigned, boundary)
+        metric_assigned = assigned.to_crs(2180)
+        metric_boundary = gpd.GeoSeries([boundary], crs=4326).to_crs(2180).iloc[0]
+        polygons, report = reconstruct_voronoi(
+            metric_assigned, metric_boundary,
+            expected_precincts=sorted(subset.precinct.unique()),
+            fallback_points={key: gpd.GeoSeries([point], crs=4326).to_crs(2180).iloc[0] for key, point in fallback_points.items()},
+        )
+        polygons["teryt"] = teryt
+        polygons["key"] = polygons.precinct.map(lambda number: f"{teryt}_{number}")
+        if self.snapshot_id:
+            polygons["snapshot_id"] = self.snapshot_id
+        attributes = subset[
+            ["precinct", "description", "commission", "eligible", "population"]
+        ].drop_duplicates("precinct")
+        polygons = polygons.merge(attributes, on="precinct", how="left")
+        fallback_precincts = set(report["fallback_precincts"])
+        polygons["geometry_quality"] = polygons.precinct.map(
+            lambda number: "fallback" if number in fallback_precincts else "generated"
+        )
+        polygons = polygons.to_crs(4326)
+        attachments = self._attach_special(registry[registry.teryt == teryt], addresses, polygons)
+        _atomic_write_text(
+            self.report_dir / f"{teryt}_special.json",
+            attachments.to_json(orient="records", indent=2, force_ascii=False),
+        )
+        temporary_output = output.with_name(f"{output.stem}.tmp{output.suffix}")
+        polygons.to_parquet(temporary_output, index=False)
+        temporary_output.replace(output)
+        report.update({
+            "teryt": teryt,
+            "snapshot_id": self.snapshot_id,
+            "assignment_rate": float(assigned.precinct.notna().mean()),
+            "conflicts": int(((assigned.match_count > 1) & assigned.precinct.isna()).sum()),
+            "special_precincts": int(registry[(registry.teryt == teryt) & registry.special].shape[0]),
+            "special_attached": int(len(attachments)),
+        })
+        _atomic_write_text(
+            report_path, json.dumps(report, ensure_ascii=False, indent=2)
+        )
+        return polygons, report
+
+    @staticmethod
+    def _fallback_points(subset: pd.DataFrame, assigned: gpd.GeoDataFrame, boundary) -> dict[int, Point]:
+        center = boundary.representative_point()
+        result = {}
+        for precinct in subset.precinct:
+            points = assigned[assigned.precinct == precinct]
+            if not points.empty:
+                result[int(precinct)] = points.geometry.union_all().centroid
+            else:
+                result[int(precinct)] = Point(center.x + int(precinct) * 1e-8, center.y)
+        return result
+
+    @staticmethod
+    def _attach_special(registry: pd.DataFrame, addresses: gpd.GeoDataFrame, polygons: gpd.GeoDataFrame) -> pd.DataFrame:
+        special = registry[registry.special].copy()
+        if special.empty:
+            return pd.DataFrame(columns=["special_key", "host_key", "method"])
+        points = []
+        for row in special.itertuples():
+            street = normalize_text(getattr(row, "Ulica", ""))
+            locality = normalize_text(getattr(row, "Miejscowość", ""))
+            raw_number = str(getattr(row, "Numer posesji", "") or "")
+            number_match = re.match(r"\s*(\d+)", raw_number)
+            candidates = addresses.copy()
+            if street:
+                candidates = candidates[candidates.street.map(normalize_text) == street]
+            if locality and "miejscowosc" in candidates:
+                candidates = candidates[candidates.miejscowosc.map(normalize_text) == locality]
+            if number_match and "number" in candidates:
+                candidates = candidates[candidates.number == int(number_match.group(1))]
+            point = candidates.geometry.iloc[0] if not candidates.empty else polygons.geometry.union_all().representative_point()
+            points.append({"key": f"{row.teryt}_{row.precinct}", "geometry": point})
+        commission_points = gpd.GeoDataFrame(points, crs=addresses.crs)
+        special_keys = pd.DataFrame({"key": [item["key"] for item in points]})
+        return attach_special_precincts(special_keys, polygons[["key", "geometry"]], commission_points)
+
+    def run(
+        self,
+        registry_path: Path,
+        boundaries: gpd.GeoDataFrame | None = None,
+        *,
+        limit: int | None = None,
+        teryts: Iterable[str] | None = None,
+        retry_failed: bool = False,
+        force: bool = False,
+    ) -> list[dict]:
+        registry = load_registry(registry_path)
+        if boundaries is None:
+            boundaries = AdministrativeBoundaryClient().fetch_gminy(self.data_dir / "raw" / "prg_boundaries").to_crs(4326)
+        reports = []
+        registry_teryts = sorted(set(registry.teryt.astype(str)))
+        boundary_teryts = set(boundaries.teryt.astype(str))
+        requested_teryts = None if teryts is None else {str(value) for value in teryts}
+        selected_teryts = registry_teryts
+        previous: list[dict] = []
+        if retry_failed:
+            previous_path = self.report_dir / "national.json"
+            if not previous_path.is_file():
+                raise ValueError("Brak poprzedniego raportu national.json do ponowienia")
+            previous = json.loads(previous_path.read_text(encoding="utf-8"))
+            selected_teryts = [
+                str(item["teryt"]) for item in previous if "error" in item
+            ]
+        if requested_teryts is not None:
+            unknown = requested_teryts - set(registry_teryts)
+            if unknown:
+                raise ValueError(f"Nieznane kody TERYT: {sorted(unknown)}")
+            selected_teryts = [
+                value for value in selected_teryts if value in requested_teryts
+            ]
+        if limit:
+            selected_teryts = selected_teryts[:limit]
+        summary = self.report_dir / "national.json"
+        cumulative = {str(item["teryt"]): item for item in previous}
+        for teryt in selected_teryts:
+            if teryt not in boundary_teryts:
+                result = {
+                    "teryt": teryt,
+                    "error": "MissingBoundary: brak granicy administracyjnej dla TERYT",
+                }
+                reports.append(result)
+                cumulative[teryt] = result
+                _atomic_write_text(
+                    summary,
+                    json.dumps(
+                        [cumulative[key] for key in sorted(cumulative)],
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                )
+                continue
+            boundary = boundaries.loc[boundaries.teryt.astype(str) == teryt].geometry.union_all()
+            try:
+                _polygons, report = self.reconstruct_gmina(
+                    teryt, registry, boundary, force=force
+                )
+                result = report
+            except Exception as exc:
+                result = {"teryt": teryt, "error": f"{type(exc).__name__}: {exc}"}
+            reports.append(result)
+            cumulative[teryt] = result
+            _atomic_write_text(
+                summary,
+                json.dumps(
+                    [cumulative[key] for key in sorted(cumulative)],
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            )
+        cached = sorted(self.output_dir.glob("*.parquet"))
+        if cached:
+            national = gpd.GeoDataFrame(
+                pd.concat(
+                    [gpd.read_parquet(path) for path in cached], ignore_index=True
+                ),
+                geometry="geometry",
+                crs=4326,
+            )
+            parquet = self.processed_root / "precincts.parquet"
+            temporary_parquet = parquet.with_name("precincts.tmp.parquet")
+            national.to_parquet(temporary_parquet, index=False)
+            temporary_parquet.replace(parquet)
+            gpkg = self.processed_root / "precincts.gpkg"
+            temporary_gpkg = gpkg.with_name("precincts.tmp.gpkg")
+            if temporary_gpkg.exists():
+                temporary_gpkg.unlink()
+            national.to_file(temporary_gpkg, layer="precincts", driver="GPKG")
+            temporary_gpkg.replace(gpkg)
+        run_manifest = {
+            "snapshot_id": self.snapshot_id,
+            "registry_teryts": len(registry_teryts),
+            "selected_teryts": len(selected_teryts),
+            "successful": sum("error" not in report for report in reports),
+            "failed": sum("error" in report for report in reports),
+            "cached_municipalities": len(cached),
+            "complete_country": (
+                len(cumulative) == len(registry_teryts)
+                and not any("error" in report for report in cumulative.values())
+                and len(cached) == len(registry_teryts)
+            ),
+        }
+        _atomic_write_text(
+            self.report_dir / "run_manifest.json",
+            json.dumps(run_manifest, ensure_ascii=False, indent=2),
+        )
+        return reports

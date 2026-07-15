@@ -1,0 +1,51 @@
+services:
+  db:
+    image: postgis/postgis:16-3.5
+    environment:
+      POSTGRES_DB: gerry
+      POSTGRES_USER: gerry
+      POSTGRES_PASSWORD: gerry
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gerry"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    environment:
+      GERRY_DATABASE_URL: ${GERRY_DOCKER_DATABASE_URL:-postgresql+psycopg://gerry:gerry@db:5432/gerry}
+      GERRY_DATA_DIR: /data
+      GERRY_LAW_SNAPSHOT: ${GERRY_LAW_SNAPSHOT:-2026-07-15}
+      GERRY_INLINE_WORKER: "false"
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    build: .
+    environment:
+      GERRY_DATABASE_URL: ${GERRY_DOCKER_DATABASE_URL:-postgresql+psycopg://gerry:gerry@db:5432/gerry}
+      GERRY_DATA_DIR: /data
+      GERRY_LAW_SNAPSHOT: ${GERRY_LAW_SNAPSHOT:-2026-07-15}
+      GERRY_INLINE_WORKER: "false"
+    command: ["sh", "-c", "gerry migrate && gerry worker"]
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
