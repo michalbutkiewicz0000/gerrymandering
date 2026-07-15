@@ -482,3 +482,118 @@ rzeczywistego przepływu wewnątrz obrazu wykonuje:
 
 Po tej próbie następnym krokiem jest kontrolowany przebieg krajowy opisany
 w sekcji 3, rozpoczynany bez `--limit` i wznawiany przez `--retry-failed`.
+
+
+6. AKTUALIZACJA PO PRZEBIEGU KRAJOWYM — 15 LIPCA 2026 R.
+=========================================================
+
+Powyższe zdanie o oczekującym przebiegu krajowym jest już historyczne. Pełna
+rekonstrukcja migawki `49b45322-b35c-4e6e-8dd7-ccfe498d3e00` zakończyła się:
+
+    2477/2477 obszarów TERYT zakończonych sukcesem
+    0 błędów
+    424 komisje zagraniczne/nieterytorialne jawnie wyłączone
+    28351 poligonów obwodów
+    0 pustych i 0 niepoprawnych geometrii
+    0 zduplikowanych kluczy obwodów
+
+Przyspieszono parser opisów przez indeks tokenów ulic i miejscowości, zachowując
+wynik pełnego dopasowania w teście regresyjnym. Cache naprawia i atomowo
+przepisuje geometrię niepoligonową, GeometryCollection jest redukowana do części
+poligonowych, a fallbacki są rozstawiane deterministycznie metodą najdalszych
+punktów siatki. Częściowy przebieg `--teryt` nie nadpisuje już pełnego raportu
+krajowego. Blokada migawki zapobiega dwóm równoległym autorom także między
+hostem i kontenerem.
+
+Pierwsza budowa grafu bez tolerancji granic PRG dała 207 składowych. Audyt
+wykazał równoległe granice administracyjne przesunięte numerycznie o mniej niż
+1 cm. Dodano jawny parametr `boundary_tolerance_m=0.01`; kontakt punktowy nadal
+nie tworzy krawędzi, bo wymagany jest odcinek co najmniej 1 m. Parametry budowy
+są zapisane w artefakcie. Aktualny graf kraju ma:
+
+    28351 węzłów
+    89823 krawędzie fizyczne
+    1 składową spójną
+    0 izolatów
+    0 błędów walidacji
+
+Po tych zmianach lokalna bramka daje 132 zebrane testy: 128 przechodzi, a 4 są
+pominięte wyłącznie z powodu wymaganego PostGIS lub obrazu SCIP EXACTSOLVE.
+Ruff, kontrola JavaScriptu, konfiguracja Compose i `git diff --check` przechodzą.
+
+Docker Compose ogranicza obecnie worker do 4 CPU, a API i bazę do 1 CPU każde,
+aby ograniczyć temperaturę komputera. Przed zatwierdzeniem zmian pozostaje:
+
+1. przebudować obraz i ponownie wykonać `doctor`, `solver-smoke` oraz `/ready`,
+2. zsynchronizować pełną migawkę i końcowy graf do PostGIS oraz sprawdzić
+   idempotencję,
+3. ręcznie sprawdzić renderowanie dużej mapy i wykonać benchmark dużego zadania,
+4. uzyskać niezależną kontrolę profili prawnych przez eksperta wyborczego,
+5. zatwierdzić zmiany, wypchnąć je i odebrać wszystkie joby GitHub Actions.
+
+Szczegółowe przekazanie znajduje się w `PRZEKAZANIE_DLA_MODELU.txt`.
+
+Aktualizacja bramki obrazu: `docker compose build` po końcowych poprawkach
+zakończył się sukcesem, w tym kontrola SCIP EXACTSOLVE, obecności viprcomp/
+viprchk oraz trzech zarchiwizowanych aktów prawnych. Pozostaje uruchomieniowa
+część punktu 1 (`up`, `migrate`, `doctor`, `solver-smoke`, `/ready`); narzędzie
+automatyczne nie otrzymało dostępu do demona Docker z powodu limitu zatwierdzeń.
+
+
+7. AKTUALIZACJA — BRAMKI ODBIORU WYKONANE 15 LIPCA 2026 R. (UZUPEŁNIENIE)
+=========================================================================
+
+Wszystkie niezatwierdzone poprawki zostały ponownie sprawdzone, a runtime'owa
+część odbioru krajowego — wcześniej blokowana brakiem dostępu do demona Docker —
+została wykonana bezpośrednio na uruchomionym stosie.
+
+Bramki lokalne (bez równoległości, limit termiczny):
+
+    .venv/bin/pytest -q -ra   -> 132 zebrane, 128 passed, 4 skipped
+        (pominięte: 3x PostGIS, 1x obraz SCIP EXACTSOLVE)
+    .venv/bin/ruff check .    -> All checks passed!
+    docker compose config --quiet -> OK
+    node --check frontend/app.js  -> OK
+    git diff --check          -> brak błędów białych znaków
+
+Artefakty krajowe migawki 49b45322-b35c-4e6e-8dd7-ccfe498d3e00 potwierdzone na
+dysku i zgodne z manifestem: complete_country=true, successful=2477, failed=0,
+cached_municipalities=2477, excluded_nonterritorial_precincts=424; graph.json
+28351 węzłów, 89823 krawędzie, errors=[], build_parameters z boundary_tolerance_m
+=0.01. Dane NIE zostały nadpisane ani utracone.
+
+Bramka runtime obrazu (stos up, worker/api healthy, db healthy):
+
+    gerry migrate      -> Schemat bazy jest aktualny.
+    gerry doctor       -> Solver exact: OK (SCIP 10.0.2 EXACTSOLVE)
+                          VIPR: OK (viprcomp=tak, viprchk=tak)
+                          Certyfikacja dużych zadań: OK
+                          Archiwum prawa: OK (Zweryfikowano 3 akty prawne)
+    gerry solver-smoke -> OPTIMAL; certyfikat: zweryfikowany
+                          INFEASIBLE; certyfikat: zweryfikowany
+    curl /ready        -> {"status":"ready"}
+
+Synchronizacja PostGIS pełnej migawki krajowej (~9 s wall-clock):
+
+    gerry postgis-sync 49b45322-... ->
+        migawki=1, artefakty=0, obwody=28351, krawędzie=89823
+    w bazie: precincts=28351, adjacency_edges=89823, SRID {2180},
+        NOT ST_IsValid=0, geometry IS NULL=0, kind=physical dla wszystkich,
+        brak krawędzi między migawkami (wymuszony złożonymi kluczami obcymi),
+        ponowna synchronizacja idempotentna (liczby niezmienione).
+
+API na migawce krajowej: /health ok, /ready ready, /api/system/capabilities
+potwierdza exact_scip, viprcomp, viprchk, certified_large_jobs. Endpoint
+/api/snapshots/<id>/precincts zwraca 28351 obiektów GeoJSON (~118 MB, ~7 s).
+
+Benchmark rzeczywistej instancji optymalizacyjnej (największa certyfikowana
+wielkość solvera dokładnego, TERYT 020205, 14 obwodów): OPTIMAL,
+certificate_verified=true, 2 alternatywy, 21 krawędzi, 12 komitetów; pełny
+przepływ rekonstrukcja→graf→import→walidacja→solver→certyfikat→eksport w ~9,8 s
+wall-clock łącznie ze startem kontenera.
+
+Nadal OTWARTE (nie oznaczam jako wykonane):
+    - niezależna opinia eksperta wyborczego o profilach prawnych,
+    - ręczny przegląd ergonomii dużej mapy krajowej w przeglądarce,
+    - benchmark dużej instancji MIP SCIP powyżej 14 węzłów (solver bez limitu
+      czasu z założenia; wymaga świadomego wyboru rozmiaru i limitu zasobów).

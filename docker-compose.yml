@@ -1,6 +1,7 @@
 services:
   db:
     image: postgis/postgis:16-3.5
+    cpus: ${GERRY_DB_CPUS:-1.0}
     environment:
       POSTGRES_DB: gerry
       POSTGRES_USER: gerry
@@ -15,6 +16,7 @@ services:
 
   api:
     build: .
+    cpus: ${GERRY_API_CPUS:-1.0}
     environment:
       GERRY_DATABASE_URL: ${GERRY_DOCKER_DATABASE_URL:-postgresql+psycopg://gerry:gerry@db:5432/gerry}
       GERRY_DATA_DIR: /data
@@ -35,6 +37,7 @@ services:
 
   worker:
     build: .
+    cpus: ${GERRY_WORKER_CPUS:-4.0}
     environment:
       GERRY_DATABASE_URL: ${GERRY_DOCKER_DATABASE_URL:-postgresql+psycopg://gerry:gerry@db:5432/gerry}
       GERRY_DATA_DIR: /data

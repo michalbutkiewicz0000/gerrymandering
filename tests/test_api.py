@@ -205,6 +205,7 @@ def test_api_builds_and_persists_graph_inside_snapshot(tmp_path, monkeypatch):
     assert result["nodes"] == 2
     assert result["node_ids"] == ["a", "b"]
     assert len(result["edges"]) == 1
+    assert result["build_parameters"]["boundary_tolerance_m"] == 0.01
     assert result["path"].endswith(f"{snapshot_id}/graph.json")
     assert (root / "graph.json").is_file()
 

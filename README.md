@@ -67,8 +67,9 @@ gerry reconstruct data/raw/imports/mapa_obwodow/sejm2023/obwody_glosowania_utf8.
 ```
 
 Do pilotażu służy `--teryt 020302,020402` albo `--limit N`. Pełny przebieg
-można liczyć równolegle przez `--workers 0` (wszystkie logiczne CPU) albo
-ograniczyć jawnie, np. `--workers 8`. Manifest ustawia `complete_country: true`
+można liczyć równolegle przez `--workers 0` (wszystkie logiczne CPU), ale na
+stacji roboczej zalecany jest jawny limit, np. `--workers 4`, aby ograniczyć
+temperaturę i pozostawić zasoby dla systemu. Manifest ustawia `complete_country: true`
 dopiero po przetworzeniu całego rejestru bez błędów i obecności pliku cache
 każdej gminy. CLI najpierw pokazuje liczbę wyników znalezionych w cache, a
 następnie raportuje postęp co 25 obszarów oraz każdy błąd osobno.

@@ -257,6 +257,7 @@ def graph_build(
     snapshot_id: Annotated[str, typer.Option(help="Identyfikator migawki danych")],
     key_column: str = "key",
     min_border_m: float = 1.0,
+    boundary_tolerance_m: float = 0.01,
 ) -> None:
     if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
         raise typer.BadParameter("Nie znaleziono migawki; najpierw użyj snapshot-create")
@@ -267,10 +268,13 @@ def graph_build(
     resolved_output = output.resolve()
     if not resolved_output.is_relative_to(snapshot_root):
         raise typer.BadParameter("Graf wynikowy musi należeć do wskazanej migawki")
-    frame = gpd.read_file(source)
+    frame = _read_geodata(source)
     try:
         edges = build_adjacency(
-            frame, key_column=key_column, min_shared_border_m=min_border_m
+            frame,
+            key_column=key_column,
+            min_shared_border_m=min_border_m,
+            boundary_tolerance_m=boundary_tolerance_m,
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -281,6 +285,12 @@ def graph_build(
         "node_ids": frame[key_column].astype(str).tolist(),
         "edges": [edge.model_dump() for edge in edges],
         "errors": errors,
+        "build_parameters": {
+            "key_column": key_column,
+            "metric_crs": 2180,
+            "min_shared_border_m": min_border_m,
+            "boundary_tolerance_m": boundary_tolerance_m,
+        },
     }
     _atomic_write_text(
         resolved_output, json.dumps(payload, ensure_ascii=False, indent=2)

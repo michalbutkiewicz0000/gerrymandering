@@ -150,6 +150,24 @@ def assign_addresses(addresses: gpd.GeoDataFrame, precinct_rules: list[PrecinctR
     return assigned
 
 
+def polygonal_geometry(geometry):
+    """Return only area components from make_valid, rejecting line-only input."""
+    valid = geometry if geometry.is_valid else shapely.make_valid(geometry)
+    if valid.geom_type in {"Polygon", "MultiPolygon"}:
+        return valid
+    polygons = []
+    for part in shapely.get_parts(valid):
+        if part.geom_type in {"Polygon", "MultiPolygon"}:
+            polygons.append(part)
+        elif part.geom_type == "GeometryCollection":
+            nested = polygonal_geometry(part)
+            if not nested.is_empty:
+                polygons.append(nested)
+    if not polygons:
+        raise ValueError("Geometria nie zawiera części powierzchniowej")
+    return shapely.union_all(polygons)
+
+
 def reconstruct_voronoi(
     assigned: gpd.GeoDataFrame,
     boundary,
@@ -177,8 +195,7 @@ def reconstruct_voronoi(
     if points.empty:
         raise ValueError("reconstruction requires at least one territorial precinct")
     points = gpd.GeoDataFrame(points, geometry="geometry", crs=assigned.crs)
-    if not boundary.is_valid:
-        boundary = shapely.make_valid(boundary)
+    boundary = polygonal_geometry(boundary)
     regions = shapely.voronoi_polygons(MultiPoint(points.geometry.tolist()), extend_to=boundary)
     cells = gpd.GeoDataFrame(geometry=list(regions.geoms), crs=assigned.crs)
     joined = gpd.sjoin(cells, points, predicate="contains", how="inner")
@@ -189,8 +206,8 @@ def reconstruct_voronoi(
     projected = bool(assigned.crs and assigned.crs.is_projected)
     grid_size = 1e-6 if projected else 1e-12
     joined["geometry"] = shapely.intersection(
-        shapely.make_valid(joined.geometry.array),
-        shapely.make_valid(boundary),
+        [polygonal_geometry(geometry) for geometry in joined.geometry.array],
+        boundary,
         grid_size=grid_size,
     )
     result = joined.dissolve(by="precinct").reset_index()[["precinct", "geometry"]]

@@ -52,6 +52,7 @@ class GraphCreate(BaseModel):
     source_path: str | None = None
     key_column: str = Field(default="key", min_length=1)
     min_shared_border_m: float = Field(default=1.0, ge=0)
+    boundary_tolerance_m: float = Field(default=0.01, ge=0)
 
 
 class ValidationCreate(BaseModel):
@@ -312,6 +313,7 @@ def build_graph(body: GraphCreate) -> dict:
         edges = build_adjacency(
             frame, key_column=body.key_column,
             min_shared_border_m=body.min_shared_border_m,
+            boundary_tolerance_m=body.boundary_tolerance_m,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -322,6 +324,12 @@ def build_graph(body: GraphCreate) -> dict:
         "node_ids": node_ids,
         "edges": [edge.model_dump() for edge in edges],
         "errors": validate_graph(node_ids, edges),
+        "build_parameters": {
+            "key_column": body.key_column,
+            "metric_crs": 2180,
+            "min_shared_border_m": body.min_shared_border_m,
+            "boundary_tolerance_m": body.boundary_tolerance_m,
+        },
     }
     output = snapshot_root / "graph.json"
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -5,10 +5,11 @@ import time
 import geopandas as gpd
 import pandas as pd
 import pytest
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 
 import gerry.pipeline as pipeline_module
-from gerry.pipeline import NationalReconstructionPipeline
+from gerry.pipeline import NationalReconstructionPipeline, assign_with_pkw_parser
+from gerry.pkw_parser import parse_opis_granic, resolve_obwod
 
 
 def test_reconstruction_outputs_are_isolated_by_snapshot(tmp_path):
@@ -21,6 +22,45 @@ def test_reconstruction_outputs_are_isolated_by_snapshot(tmp_path):
     assert first.report_dir == tmp_path / "artifacts/reconstruction/snapshot-a"
 
 
+def test_indexed_parser_assignment_matches_exhaustive_resolution():
+    registry = pd.DataFrame(
+        {
+            "precinct": [1, 2, 3],
+            "area_type": ["miasto", "miasto", "wieś"],
+            "description": [
+                "ul. Długa: 1-9 nieparzyste, ul. Jana Pawła II",
+                "ul. Długa: 2-10 parzyste, ul. Nowa Kolejowa",
+                "wieś Zielona",
+            ],
+        }
+    )
+    addresses = gpd.GeoDataFrame(
+        {
+            "street": ["Długa", "Długa", "Aleja Jana Pawła II", "Kolejowa", ""],
+            "number": [3, 4, 12, 7, 1],
+            "miejscowosc": ["Miasto", "Miasto", "Miasto", "Miasto", "Zielona"],
+        },
+        geometry=gpd.points_from_xy(range(5), range(5)),
+        crs=4326,
+    )
+    rules = [
+        parse_opis_granic(row.precinct, row.area_type, row.description)
+        for row in registry.itertuples()
+    ]
+    expected = [
+        resolve_obwod(rules, row.street, row.number, row.miejscowosc)
+        for row in addresses.itertuples()
+    ]
+
+    assigned = assign_with_pkw_parser(addresses, registry)
+
+    actual_precincts = [
+        None if pd.isna(value) else int(value) for value in assigned.precinct
+    ]
+    assert actual_precincts == [item[0] for item in expected]
+    assert assigned.match_count.tolist() == [item[1] for item in expected]
+
+
 def test_national_pipeline_rejects_a_second_writer_for_the_same_snapshot(
     tmp_path,
 ):
@@ -29,6 +69,7 @@ def test_national_pipeline_rejects_a_second_writer_for_the_same_snapshot(
     pipeline = NationalReconstructionPipeline(tmp_path, snapshot_id="snapshot")
     lock_path = pipeline.report_dir / ".run.lock"
     with lock_path.open("a+", encoding="utf-8") as handle:
+        lock_path.chmod(0o444)
         pipeline_module.fcntl.flock(
             handle, pipeline_module.fcntl.LOCK_EX | pipeline_module.fcntl.LOCK_NB
         )
@@ -37,6 +78,7 @@ def test_national_pipeline_rejects_a_second_writer_for_the_same_snapshot(
                 pipeline.run(tmp_path / "registry.xlsx")
         finally:
             pipeline_module.fcntl.flock(handle, pipeline_module.fcntl.LOCK_UN)
+            lock_path.chmod(0o644)
 
 
 def test_national_area_list_merges_warsaw_and_excludes_foreign_precincts(tmp_path):
@@ -49,6 +91,28 @@ def test_national_area_list_merges_warsaw_and_excludes_foreign_precincts(tmp_pat
     assert pipeline._area_teryts(registry) == ["020101", "146501"]
     warsaw = pipeline._registry_for_area(registry, "146501")
     assert warsaw.teryt.tolist() == ["146502", "146503", "146519"]
+
+
+def test_fallback_points_are_spread_inside_boundary(tmp_path):
+    pipeline = NationalReconstructionPipeline(tmp_path, snapshot_id="snapshot")
+    subset = pd.DataFrame({"precinct": [1, 2, 3, 4]})
+    assigned = gpd.GeoDataFrame(
+        {"precinct": pd.array([1], dtype="Int64")},
+        geometry=[Point(1, 1)],
+        crs=4326,
+    )
+    boundary = box(0, 0, 10, 10)
+
+    points = pipeline._fallback_points(subset, assigned, boundary)
+
+    assert set(points) == {1, 2, 3, 4}
+    assert all(boundary.covers(point) for point in points.values())
+    values = list(points.values())
+    assert min(
+        left.distance(right)
+        for index, left in enumerate(values)
+        for right in values[index + 1 :]
+    ) > 1
 
 
 def test_national_pipeline_reports_every_registry_teryt_missing_a_boundary(
@@ -151,6 +215,36 @@ def test_national_pipeline_repairs_invalid_boundary_without_stopping_country(
     ) == [{"teryt": "020101"}]
 
 
+def test_national_pipeline_repairs_invalid_cached_polygons(tmp_path, monkeypatch):
+    registry = pd.DataFrame({"teryt": ["020101"], "special": [False]})
+    boundaries = gpd.GeoDataFrame(
+        {"teryt": ["020101"]}, geometry=[box(0, 0, 1, 1)], crs=4326
+    )
+    monkeypatch.setattr(pipeline_module, "load_registry", lambda path: registry)
+    pipeline = NationalReconstructionPipeline(tmp_path, snapshot_id="snapshot")
+    invalid = Polygon([(0, 0), (1, 1), (1, 0), (0, 1), (0, 0)])
+    frame = gpd.GeoDataFrame(
+        {"key": ["020101_1"], "teryt": ["020101"]},
+        geometry=[invalid],
+        crs=4326,
+    )
+    frame.to_parquet(pipeline.output_dir / "020101.parquet")
+    (pipeline.report_dir / "020101.json").write_text(
+        json.dumps({"teryt": "020101"}), encoding="utf-8"
+    )
+
+    pipeline.run(tmp_path / "registry.xlsx", boundaries, workers=1)
+
+    repaired = gpd.read_parquet(pipeline.output_dir / "020101.parquet")
+    country = gpd.read_parquet(pipeline.processed_root / "precincts.parquet")
+    manifest = json.loads(
+        (pipeline.report_dir / "run_manifest.json").read_text(encoding="utf-8")
+    )
+    assert repaired.geometry.is_valid.all()
+    assert country.geometry.is_valid.all()
+    assert manifest["repaired_geometries"] == 1
+
+
 def test_retry_failed_rebuilds_country_from_all_cached_municipalities(
     tmp_path, monkeypatch
 ):
@@ -208,6 +302,45 @@ def test_retry_failed_rebuilds_country_from_all_cached_municipalities(
     assert manifest["successful"] == 2
     assert manifest["failed"] == 0
     assert manifest["complete_country"] is True
+    cumulative = json.loads(
+        (pipeline.report_dir / "national.json").read_text(encoding="utf-8")
+    )
+    assert cumulative == [{"teryt": "020101"}, {"teryt": "020102"}]
+
+
+def test_selected_teryt_run_preserves_previous_national_reports(
+    tmp_path, monkeypatch
+):
+    registry = pd.DataFrame(
+        {"teryt": ["020101", "020102"], "special": [False, False]}
+    )
+    boundaries = gpd.GeoDataFrame(
+        {"teryt": ["020101", "020102"]},
+        geometry=[box(0, 0, 1, 1), box(1, 0, 2, 1)],
+        crs=4326,
+    )
+    monkeypatch.setattr(pipeline_module, "load_registry", lambda path: registry)
+    pipeline = NationalReconstructionPipeline(tmp_path, snapshot_id="snapshot")
+    (pipeline.report_dir / "national.json").write_text(
+        json.dumps([{"teryt": "020101"}, {"teryt": "020102"}]),
+        encoding="utf-8",
+    )
+    for teryt in ("020101", "020102"):
+        frame = gpd.GeoDataFrame(
+            {"key": [f"{teryt}_1"], "teryt": [teryt]},
+            geometry=[box(0, 0, 1, 1)],
+            crs=4326,
+        )
+        frame.to_parquet(pipeline.output_dir / f"{teryt}.parquet")
+        (pipeline.report_dir / f"{teryt}.json").write_text(
+            json.dumps({"teryt": teryt}), encoding="utf-8"
+        )
+
+    reports = pipeline.run(
+        tmp_path / "registry.xlsx", boundaries, teryts=["020102"], workers=1
+    )
+
+    assert reports == [{"teryt": "020102"}]
     cumulative = json.loads(
         (pipeline.report_dir / "national.json").read_text(encoding="utf-8")
     )

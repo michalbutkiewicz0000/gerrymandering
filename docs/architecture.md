@@ -9,7 +9,12 @@ cache i grafy różnych wyborów nie mogą się wzajemnie nadpisać.
 1. `snapshots` pobiera lub importuje niezmienne artefakty PKW/PRG/TERYT.
 2. `reconstruction` parsuje opis granic, przypisuje adresy i tworzy pełny
    podział gminy. Obwody bez terytorium są dołączane audytowalnie.
-3. `graph` tworzy rook adjacency przy wspólnej granicy co najmniej 1 m.
+3. `graph` tworzy rook adjacency przy wspólnej granicy co najmniej 1 m. Granice
+   PRG zapisane osobno po obu stronach granicy administracyjnej mogą różnić się
+   numerycznie; dlatego domyślna tolerancja topologiczna 1 cm mierzy długość
+   równoległych odcinków pozostających w takim pasie. Kontakt wyłącznie w
+   punkcie nadal nie tworzy krawędzi. Próg i tolerancja są zapisywane w
+   `build_parameters` artefaktu grafu i można je jawnie zmienić w API/CLI.
 4. `elections` symuluje większość względną lub D'Hondta na liczbach całkowitych.
 5. `law` sprawdza pokrycie, liczbę okręgów, spójność, ludność i ograniczenia
    konfiguracji, oddzielając zgodność strukturalną od obowiązujących granic.

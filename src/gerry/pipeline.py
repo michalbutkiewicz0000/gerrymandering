@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import multiprocessing
 import os
 import re
@@ -15,7 +16,12 @@ import shapely
 from shapely.geometry import Point
 
 from .pkw_parser import parse_opis_granic, resolve_obwod
-from .reconstruction import attach_special_precincts, normalize_text, reconstruct_voronoi
+from .reconstruction import (
+    attach_special_precincts,
+    normalize_text,
+    polygonal_geometry,
+    reconstruct_voronoi,
+)
 from .sources import AdministrativeBoundaryClient, PrgClient, load_registry
 
 try:
@@ -44,7 +50,10 @@ def _single_reconstruction_run(function):
     @wraps(function)
     def locked(self, *args, **kwargs):
         lock_path = self.report_dir / ".run.lock"
-        with lock_path.open("a+", encoding="utf-8") as handle:
+        # Lock files may be created by root inside Docker and later consumed by
+        # an unprivileged host process. flock needs only a readable descriptor.
+        descriptor = os.open(lock_path, os.O_RDONLY | os.O_CREAT, 0o666)
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
             if fcntl is not None:
                 try:
                     fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -93,10 +102,41 @@ def assign_with_pkw_parser(addresses: gpd.GeoDataFrame, registry: pd.DataFrame) 
         parse_opis_granic(int(row.precinct), str(row.area_type), str(row.description))
         for row in registry.itertuples()
     ]
+    street_exact: dict[tuple[str, ...], set[int]] = {}
+    street_ngrams: dict[tuple[str, ...], set[int]] = {}
+    villages: dict[str, set[int]] = {}
+    for index, item in enumerate(rules):
+        for street_rule in item.streets:
+            tokens = tuple(normalize_text(street_rule.name).split())
+            if not tokens:
+                continue
+            street_exact.setdefault(tokens, set()).add(index)
+            for start in range(len(tokens)):
+                for end in range(start + 1, len(tokens) + 1):
+                    street_ngrams.setdefault(tokens[start:end], set()).add(index)
+        for village in item.villages:
+            normalized = normalize_text(village)
+            if normalized:
+                villages.setdefault(normalized, set()).add(index)
+
+    def candidates(street: str, village: str) -> list:
+        indexes = set(villages.get(normalize_text(village), ()))
+        tokens = tuple(normalize_text(street).split())
+        if tokens:
+            # Address contained in a longer rule name.
+            indexes.update(street_ngrams.get(tokens, ()))
+            # Rule name contained as whole consecutive words in the address.
+            for start in range(len(tokens)):
+                for end in range(start + 1, len(tokens) + 1):
+                    indexes.update(street_exact.get(tokens[start:end], ()))
+        return [rules[index] for index in sorted(indexes)]
+
     assigned = addresses.copy()
     results = [
         resolve_obwod(
-            rules,
+            candidates(
+                getattr(row, "street", ""), getattr(row, "miejscowosc", "")
+            ),
             getattr(row, "street", ""),
             getattr(row, "number", None),
             getattr(row, "miejscowosc", ""),
@@ -177,6 +217,9 @@ class NationalReconstructionPipeline:
             lambda number: "fallback" if number in fallback_precincts else "generated"
         )
         polygons = polygons.to_crs(4326)
+        polygons["geometry"] = [
+            polygonal_geometry(geometry) for geometry in polygons.geometry
+        ]
         attachments = self._attach_special(area_registry, addresses, polygons)
         _atomic_write_text(
             self.report_dir / f"{teryt}_special.json",
@@ -200,14 +243,48 @@ class NationalReconstructionPipeline:
 
     @staticmethod
     def _fallback_points(subset: pd.DataFrame, assigned: gpd.GeoDataFrame, boundary) -> dict[int, Point]:
-        center = boundary.representative_point()
-        result = {}
-        for precinct in subset.precinct:
+        result: dict[int, Point] = {}
+        missing: list[int] = []
+        for precinct in sorted({int(value) for value in subset.precinct}):
             points = assigned[assigned.precinct == precinct]
             if not points.empty:
-                result[int(precinct)] = points.geometry.union_all().centroid
+                result[precinct] = points.geometry.union_all().centroid
             else:
-                result[int(precinct)] = Point(center.x + int(precinct) * 1e-8, center.y)
+                missing.append(precinct)
+        if not missing:
+            return result
+
+        min_x, min_y, max_x, max_y = boundary.bounds
+        side = max(8, math.ceil(math.sqrt(len(missing) * 25)))
+        candidates = [boundary.representative_point()]
+        for row in range(side):
+            y = min_y + (row + 0.5) * (max_y - min_y) / side
+            for column in range(side):
+                x = min_x + (column + 0.5) * (max_x - min_x) / side
+                point = Point(x, y)
+                if boundary.covers(point):
+                    candidates.append(point)
+
+        occupied = list(result.values())
+        for precinct in missing:
+            if not candidates:
+                raise ValueError(
+                    f"Brak rozłącznych punktów fallback dla obwodu {precinct}"
+                )
+            if occupied:
+                point = max(
+                    candidates,
+                    key=lambda candidate: (
+                        min(candidate.distance(other) for other in occupied),
+                        -candidate.x,
+                        -candidate.y,
+                    ),
+                )
+            else:
+                point = candidates[0]
+            result[precinct] = point
+            occupied.append(point)
+            candidates.remove(point)
         return result
 
     @staticmethod
@@ -259,11 +336,14 @@ class NationalReconstructionPipeline:
         requested_teryts = None if teryts is None else {str(value) for value in teryts}
         selected_teryts = registry_teryts
         previous: list[dict] = []
+        previous_path = self.report_dir / "national.json"
+        if previous_path.is_file():
+            previous = json.loads(previous_path.read_text(encoding="utf-8"))
+            if not isinstance(previous, list):
+                raise ValueError("Poprzedni raport national.json nie jest listą")
         if retry_failed:
-            previous_path = self.report_dir / "national.json"
             if not previous_path.is_file():
                 raise ValueError("Brak poprzedniego raportu national.json do ponowienia")
-            previous = json.loads(previous_path.read_text(encoding="utf-8"))
             selected_teryts = [
                 str(item["teryt"]) for item in previous if "error" in item
             ]
@@ -417,11 +497,34 @@ class NationalReconstructionPipeline:
         )
         reports.sort(key=lambda item: str(item["teryt"]))
         cached = sorted(self.output_dir.glob("*.parquet"))
+        repaired_geometries = 0
         if cached:
+            cached_frames = []
+            for path in cached:
+                frame = gpd.read_parquet(path)
+                needs_repair = (~frame.geometry.is_valid) | ~frame.geometry.geom_type.isin(
+                    ["Polygon", "MultiPolygon"]
+                )
+                if needs_repair.any():
+                    repaired_geometries += int(needs_repair.sum())
+                    frame.loc[needs_repair, "geometry"] = [
+                        polygonal_geometry(geometry)
+                        for geometry in frame.loc[needs_repair, "geometry"]
+                    ]
+                    if (~frame.geometry.is_valid).any() or not frame.geometry.geom_type.isin(
+                        ["Polygon", "MultiPolygon"]
+                    ).all():
+                        raise ValueError(
+                            f"Nie udało się naprawić geometrii cache {path.name}"
+                        )
+                    temporary_cache = path.with_name(
+                        f"{path.stem}.tmp{path.suffix}"
+                    )
+                    frame.to_parquet(temporary_cache, index=False)
+                    temporary_cache.replace(path)
+                cached_frames.append(frame)
             national = gpd.GeoDataFrame(
-                pd.concat(
-                    [gpd.read_parquet(path) for path in cached], ignore_index=True
-                ),
+                pd.concat(cached_frames, ignore_index=True),
                 geometry="geometry",
                 crs=4326,
             )
@@ -449,6 +552,7 @@ class NationalReconstructionPipeline:
             ),
             "failed": sum("error" in report for report in cumulative.values()),
             "cached_municipalities": len(cached),
+            "repaired_geometries": repaired_geometries,
             "complete_country": (
                 len(cumulative) == len(registry_teryts)
                 and not any("error" in report for report in cumulative.values())

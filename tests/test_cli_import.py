@@ -107,6 +107,12 @@ def test_graph_cli_persists_versioned_api_compatible_payload(tmp_path, monkeypat
     assert payload["node_ids"] == ["a", "b"]
     assert len(payload["edges"]) == 1
     assert payload["errors"] == []
+    assert payload["build_parameters"] == {
+        "key_column": "key",
+        "metric_crs": 2180,
+        "min_shared_border_m": 1.0,
+        "boundary_tolerance_m": 0.01,
+    }
     assert not output.with_suffix(".json.part").exists()
 
 

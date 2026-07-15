@@ -14,6 +14,7 @@ def build_adjacency(
     *,
     key_column: str = "key",
     min_shared_border_m: float = 1.0,
+    boundary_tolerance_m: float = 0.01,
     metric_crs: int = 2180,
 ) -> list[AdjacencyEdge]:
     if geometries.crs is None:
@@ -30,19 +31,47 @@ def build_adjacency(
         raise ValueError("graph geometries must not be null or empty")
     if (~geometries.geometry.is_valid).any():
         raise ValueError("graph geometries must be valid")
+    if not geometries.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).all():
+        raise ValueError("graph geometries must be polygonal")
     if min_shared_border_m < 0:
         raise ValueError("minimum shared border must be non-negative")
+    if boundary_tolerance_m < 0:
+        raise ValueError("boundary tolerance must be non-negative")
     frame = geometries[[key_column, "geometry"]].to_crs(epsg=metric_crs).reset_index(drop=True)
     spatial_index = frame.sindex
+    boundaries = frame.geometry.boundary
+    boundary_buffers = (
+        boundaries.buffer(
+            boundary_tolerance_m,
+            cap_style="flat",
+            join_style="mitre",
+        )
+        if boundary_tolerance_m
+        else None
+    )
     edges: list[AdjacencyEdge] = []
     for left_idx, left in frame.iterrows():
-        candidates = spatial_index.query(left.geometry, predicate="intersects")
+        search_geometry = (
+            left.geometry.buffer(boundary_tolerance_m)
+            if boundary_tolerance_m
+            else left.geometry
+        )
+        candidates = spatial_index.query(search_geometry, predicate="intersects")
         for right_idx in candidates:
             if int(right_idx) <= left_idx:
                 continue
             right = frame.iloc[int(right_idx)]
-            shared = left.geometry.boundary.intersection(right.geometry.boundary)
+            shared = boundaries.iloc[left_idx].intersection(boundaries.iloc[int(right_idx)])
             length = float(shared.length)
+            if length < min_shared_border_m and boundary_buffers is not None:
+                right_idx = int(right_idx)
+                near_left = boundaries.iloc[left_idx].intersection(
+                    boundary_buffers.iloc[right_idx]
+                ).length
+                near_right = boundaries.iloc[right_idx].intersection(
+                    boundary_buffers.iloc[left_idx]
+                ).length
+                length = float(min(near_left, near_right))
             if length >= min_shared_border_m:
                 edges.append(
                     AdjacencyEdge(

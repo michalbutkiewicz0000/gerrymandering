@@ -1,0 +1,368 @@
+GERRYMANDERING PL — SZCZEGÓŁOWE PRZEKAZANIE DLA MODELU KOŃCZĄCEGO PROJEKT
+Stan na: 15 lipca 2026 r.
+Repozytorium: /home/michal/PycharmProjects/gerrymandering
+GitHub: https://github.com/michalbutkiewicz0000/gerrymandering
+Gałąź: master
+
+
+0. CEL I ZASADA ODBIORU
+======================
+
+Celem pozostaje kompletny program, który:
+
+1. rekonstruuje poligony polskich obwodów głosowania z rejestru PKW i PRG,
+2. buduje prawidłowy graf sąsiedztwa obwodów,
+3. importuje wyniki i scenariusze wyborcze,
+4. sprawdza reguły prawa wyborczego,
+5. dokładnie optymalizuje spójne podziały na okręgi dla komitetu lub kandydata,
+6. działa przez Docker, API, CLI i interfejs WWW,
+7. posiada testy, certyfikaty optimum oraz udokumentowane bramki odbioru.
+
+Nie wolno uznać projektu za skończony tylko dlatego, że testy jednostkowe są
+zielone. Odbiór wymaga dowodów z docs/acceptance.md oraz kontroli każdego
+pozostałego punktu opisanego niżej.
+
+
+1. WAŻNY STAN GITA — NIE UTRACIĆ TYCH ZMIAN
+===========================================
+
+Ostatni wypchnięty commit:
+
+    7054851 Parallelize nationwide reconstruction safely
+
+Jego GitHub Actions (run 29425207885) był w całości zielony, łącznie z jobem
+Docker/SCIP/VIPR. Po tym commicie powstały ważne, jeszcze NIEZATWIERDZONE
+zmiany. Przed pracą wykonaj:
+
+    cd /home/michal/PycharmProjects/gerrymandering
+    git status --short
+    git diff --check
+    git diff
+
+Obecnie zmodyfikowane są:
+
+    docker-compose.yml
+    src/gerry/cli.py
+    src/gerry/graph.py
+    src/gerry/pipeline.py
+    src/gerry/reconstruction.py
+    tests/test_graph.py
+    tests/test_pipeline.py
+    tests/test_reconstruction.py
+
+Nie wykonuj `git reset --hard`, `git checkout --` ani nie nadpisuj tych plików.
+To są zamierzone poprawki, które trzeba przetestować, zatwierdzić i wypchnąć.
+
+Zmiany obejmują:
+
+- znacznie szybszy indeksowany parser ulic i miejscowości zamiast porównywania
+  każdego punktu adresowego z każdą regułą obwodu;
+- test zgodności wyniku indeksowanego parsera z pełnym wyszukiwaniem;
+- wydobywanie części poligonowych z GeometryCollection i naprawę geometrii;
+- normalizowanie oraz atomowe przepisywanie starych plików cache, jeśli mają
+  geometrię niepoprawną albo niepoligonową;
+- deterministyczne rozstawienie fallbacków metodą najdalszych punktów siatki,
+  zamiast niemal nakładających się punktów oddalonych o centymetry;
+- zachowanie pełnego national.json/run_manifest.json przy częściowym przebiegu
+  z `--teryt` (wcześniej częściowa próba mogła nadpisać raport krajowy);
+- blokadę pojedynczego autora migawki zgodną także z plikiem lock utworzonym
+  w kontenerze jako root i tylko do odczytu na hoście;
+- odczyt Parquet w komendzie `graph-build` przez wspólny czytnik geodanych;
+- odrzucanie przez graf geometrii poprawnych formalnie, ale niepoligonowych;
+- limity CPU Compose: baza 1 CPU, API 1 CPU, worker 4 CPU, konfigurowalne przez
+  GERRY_DB_CPUS, GERRY_API_CPUS i GERRY_WORKER_CPUS.
+
+
+2. AUTORYTATYWNY PRZEBIEG KRAJOWY — WYKONANY
+============================================
+
+Identyfikator migawki:
+
+    49b45322-b35c-4e6e-8dd7-ccfe498d3e00
+
+Wejścia:
+
+    data/raw/imports/mapa_obwodow/sejm2023/obwody_glosowania_utf8.xlsx
+    data/raw/prg_boundaries/gminy.parquet
+
+Raport:
+
+    data/artifacts/reconstruction/49b45322-b35c-4e6e-8dd7-ccfe498d3e00/run_manifest.json
+
+Warstwa krajowa:
+
+    data/processed/snapshots/49b45322-b35c-4e6e-8dd7-ccfe498d3e00/precincts.parquet
+    data/processed/snapshots/49b45322-b35c-4e6e-8dd7-ccfe498d3e00/precincts.gpkg
+
+Ostatnio potwierdzone wartości manifestu:
+
+    complete_country = true
+    registry_teryts = 2477
+    successful = 2477
+    failed = 0
+    cached_municipalities = 2477
+    excluded_nonterritorial_precincts = 424
+
+Pole selected_teryts = 829 i processed_this_run = 829 jest prawidłowe: ostatni
+przebieg ponownie przeliczał 829 gmin zawierających fallbacki, a poprawiony
+pipeline zachował skumulowany raport wszystkich 2477 gmin.
+
+Ostatnia kontrola precincts.parquet:
+
+    liczba wierszy = 28351
+    CRS = EPSG:4326
+    Polygon = 21867
+    MultiPolygon = 6484
+    geometrie niepoprawne = 0
+    geometrie puste = 0
+    duplikaty precinct_key = 0
+
+Trzy dawne przypadki geometrii liniowej zostały ponownie utworzone jako
+poligony:
+
+    040301_4
+    041002_10
+    141505_3
+
+Nie uruchamiaj bez potrzeby pełnego `--force` dla kraju. Cache jest kompletny.
+Jeśli potrzebny jest przebieg kontrolny, najpierw użyj cache i maksymalnie
+4 workerów ze względu na temperaturę komputera użytkownika.
+
+
+3. GRAF KRAJOWY — NAPRAWA TOPOLOGII WYKONANA, WYMAGA BRAMEK
+===========================================================
+
+Artefakt:
+
+    data/processed/snapshots/49b45322-b35c-4e6e-8dd7-ccfe498d3e00/graph.json
+
+Pierwszy wynik bez tolerancji topologicznej miał 71106 krawędzi, 207
+składowych i 2 izolaty. Diagnoza wszystkich par między składowymi wykazała:
+
+    pary między składowymi w odległości <= 1 cm = 8677
+    liczba składowych po uwzględnieniu tych par = 1
+
+Kontrola rzeczywistych par wykazała, że po obu stronach granicy gminy PRG
+istnieją równoległe odcinki długości setek lub tysięcy metrów, lecz zapisane
+osobno geometrie różnią się o mikroskopijny ułamek metra. Przykłady:
+
+    142202_3 — 281102_2: około 5908 m równoległej granicy
+    142106_14 — 146517_666: około 592 m równoległej granicy
+
+Nie były to odległe województwa ani dowolne najbliższe poligony: Chorzele,
+Janowo i Wielbark leżą przy granicy mazowiecko-warmińsko-mazurskiej.
+
+Zaimplementowano w `build_adjacency` jawnie konfigurowalną tolerancję
+`boundary_tolerance_m`, domyślnie 0,01 m. Algorytm mierzy długość części obu
+granic znajdujących się w pasie tolerancji i bierze mniejszy z dwóch pomiarów.
+Nadal obowiązuje minimalny wspólny odcinek 1 m, dlatego kontakt tylko w punkcie
+nie tworzy krawędzi. Tolerancję można wyłączyć wartością 0.
+
+Parametr dodano do CLI i API. Artefakt zapisuje teraz reprodukowalne
+`build_parameters`: key_column, metric_crs, min_shared_border_m i
+boundary_tolerance_m. Dodano regresje mikroszczeliny i wyłączonej tolerancji;
+dotychczasowy test kontaktu narożnego nadal przechodzi.
+
+Graf kraju zbudowano ponownie. Aktualny wynik:
+
+    węzły = 28351
+    krawędzie = 89823
+    krawędzie między różnymi TERYT = 29348
+    składowe spójne = 1
+    izolowane węzły = 0
+    errors = []
+    edge kinds = ["physical"]
+
+Budowa trwała około 30 sekund i zużyła maksymalnie około 947 MB RSS, jednym
+procesem. Pełny pytest po tej poprawce przeszedł; pozostała bramka obrazu oraz
+PostGIS sync. Nie dodano automatycznych bridge/ferry, bo
+nie były potrzebne do spójności grafu i nie ma źródła uzasadniającego takie
+wyjątki. Obsługa tych typów istnieje nadal w modelu i optymalizatorze.
+
+
+4. TESTY NIEZATWIERDZONYCH POPRAWEK
+===================================
+
+Po wszystkich obecnych zmianach pełny zestaw został wykonany 15 lipca 2026 r.:
+
+    132 tests collected
+    128 passed
+    4 skipped
+
+Pominięto wyłącznie trzy testy wymagające testowego PostGIS oraz jeden test
+wymagający obrazu SCIP EXACTSOLVE. Odpowiadające bramki przechodziły wcześniej
+w obrazie i CI, ale po bieżących zmianach trzeba je powtórzyć.
+
+Uruchomić w tej kolejności, bez równoległego pytest:
+
+    cd /home/michal/PycharmProjects/gerrymandering
+    .venv/bin/pytest -q -ra
+    .venv/bin/ruff check .
+    docker compose config --quiet
+    node --check frontend/app.js
+    git diff --check
+
+W tej samej kontroli przeszły również `ruff check .`, `docker compose config
+--quiet`, `node --check frontend/app.js` i `git diff --check`. Po kolejnych
+zmianach trzeba uruchomić je ponownie. Zapisać wynik w STATUS_PRAC.txt.
+
+
+5. DOCKER I OGRANICZENIE TEMPERATURY
+====================================
+
+Użytkownik zgłosił zbyt wysoką temperaturę rdzeni. Znaleziono wcześniej dwa
+równoległe, stare przebiegi rekonstrukcji i zakończono je. Obecnie pełna
+rekonstrukcja nie działa. docker-compose.yml ma niezatwierdzone limity:
+
+    db     1 CPU
+    api    1 CPU
+    worker 4 CPU
+
+Kontrola `docker inspect` potwierdziła odpowiednio NanoCPUs:
+
+    1000000000
+    1000000000
+    4000000000
+
+Nie używać `--workers 20` ani `--workers 0`. Domyślnie używać `--workers 4`,
+a jeśli temperatury nadal są wysokie — `--workers 2`. Nie uruchamiać ciężkich
+zadań jednocześnie z Docker build albo pełnym pytest.
+
+Po zakończeniu zmian wykonać bramkę obrazu:
+
+    docker compose up -d --build
+    docker compose ps
+    docker compose exec -T worker gerry migrate
+    docker compose exec -T worker gerry doctor
+    docker compose exec -T worker gerry solver-smoke
+    curl -fsS http://localhost:8000/ready
+
+Aktualizacja 15 lipca 2026 r.: `docker compose build` po wszystkich opisanych
+zmianach zakończył się sukcesem. Kompilacja SCIP/SoPlex/VIPR była w cache,
+instalacja aplikacji przeszła, wykryto `viprcomp` i `viprchk`, a build wykonał
+`Zweryfikowano 3 akty prawne`. Próba uruchomienia poniższej bramki runtime
+została odrzucona przez limit narzędzia zatwierdzającego dostęp do demona
+Docker, nie przez błąd obrazu:
+
+    docker compose up -d --force-recreate
+    docker compose exec -T worker gerry migrate
+    docker compose exec -T worker gerry doctor
+    docker compose exec -T worker gerry solver-smoke
+    curl -fsS http://localhost:8000/ready
+
+Należy wykonać te komendy bezpośrednio w terminalu użytkownika i wkleić wynik
+albo powtórzyć je, gdy dostęp narzędzia do Dockera będzie ponownie możliwy.
+
+Oczekiwane kluczowe wyniki:
+
+    Schemat bazy jest aktualny.
+    Solver exact: OK (SCIP 10.0.2 EXACTSOLVE)
+    VIPR: OK (viprcomp=tak, viprchk=tak)
+    Status: OPTIMAL; certyfikat: zweryfikowany
+    Brak rozwiązania: INFEASIBLE; certyfikat: zweryfikowany
+    {"status":"ready"}
+
+
+6. POSTGIS I PRZEPŁYW KRAJOWY PO NAPRAWIE GRAFU
+===============================================
+
+Gdy graph.json będzie audytowalny, zsynchronizować pełną migawkę:
+
+    docker compose exec -T worker gerry postgis-sync \
+      49b45322-b35c-4e6e-8dd7-ccfe498d3e00
+
+Najpierw sprawdzić `gerry postgis-sync --help`, bo sygnatura CLI jest źródłem
+prawdy. Potem potwierdzić w bazie:
+
+- 28351 obwodów w tej migawce,
+- liczbę krawędzi zgodną z końcowym graph.json,
+- SRID 2180 i poprawność wszystkich geometrii,
+- brak krawędzi między migawkami,
+- idempotencję ponownej synchronizacji.
+
+Następnie przez API sprawdzić co najmniej:
+
+    curl -fsS http://localhost:8000/health
+    curl -fsS http://localhost:8000/ready
+    curl -fsS http://localhost:8000/api/system/capabilities
+
+Otworzyć `/docs` i interfejs `/`, załadować migawkę krajową oraz sprawdzić,
+czy duża mapa SVG nie blokuje przeglądarki. Ten ręczny przegląd dużej migawki
+jest nadal wskazany w docs/acceptance.md jako oczekujący.
+
+
+7. STATUS, COMMIT I PUSH
+========================
+
+STATUS_PRAC.txt jest obszerny, lecz nie opisuje jeszcze zakończonego przebiegu
+krajowego ani naprawionej topologii grafu. Zaktualizować go:
+
+- przebieg krajowy przenieść do wykonanych i podać 2477/2477, 28351 poligonów,
+  0 błędów, 0 pustych, 0 duplikatów i 424 komisje nieterytorialne;
+- opisać indeks parsera, naprawę GeometryCollection i nowe fallbacki;
+- wpisać końcową liczbę węzłów/krawędzi/składowych grafu oraz sposób audytu;
+- wpisać dokładny wynik pełnego pytest i bramek Docker;
+- zachować jako otwarte: niezależny przegląd prawa przez eksperta, ręczny test
+  dużej mapy oraz pomiary pamięci/czasu dużej instancji optymalizacyjnej,
+  jeśli faktycznie nie zostały wykonane.
+
+Po zielonych bramkach:
+
+    git status --short
+    git diff --check
+    git diff --stat
+    git add docker-compose.yml src/gerry/cli.py src/gerry/graph.py \
+      src/gerry/pipeline.py src/gerry/reconstruction.py \
+      tests/test_graph.py tests/test_pipeline.py tests/test_reconstruction.py \
+      STATUS_PRAC.txt PRZEKAZANIE_DLA_MODELU.txt
+    git commit -m "Complete nationwide reconstruction and audit graph topology"
+    git push origin master
+
+Jeżeli dochodzą pliki naprawy grafu/testy, oczywiście również je dodać. Po push
+sprawdzić GitHub Actions i nie ogłaszać odbioru, dopóki wszystkie joby nie są
+zielone. Repozytorium jest publiczne. Tożsamość Git jest już skonfigurowana:
+
+    michalbutkiewicz0000
+    michalbutkiewicz0000@users.noreply.github.com
+
+
+8. POZOSTAŁE WARUNKI PEŁNEGO ODBIORU
+====================================
+
+Po pełnych bramkach grafu wykonać audyt wymagań z docs/acceptance.md, README.md oraz
+docs/architecture.md. Nie wystarczy założyć, że starsze wpisy są aktualne.
+
+Otwarte lub wymagające mocnego dowodu są co najmniej:
+
+1. pełna bramka testów/Dockera dla końcowej topologii grafu kraju,
+2. pełna synchronizacja krajowej migawki i grafu do PostGIS,
+3. ręczny test renderowania oraz wyboru obszaru na dużej mapie,
+4. pomiar czasu i pamięci reprezentatywnej dużej instancji optymalizacyjnej,
+5. niezależna kontrola profili prawnych przez eksperta wyborczego.
+
+Punktu 5 nie wolno samodzielnie oznaczyć jako wykonany bez rzeczywistej opinii
+eksperta. Program może być technicznie ukończony, ale status pełnej walidacji
+prawnej musi wtedy pozostać jawnie oczekujący.
+
+Dla każdej pozycji matrycy odbioru zapisać dowód: plik/test, komendę, wynik i
+datę. Dopiero gdy wszystkie wymagania celu mają bezpośredni dowód i nic nie
+pozostaje, można uznać cały projekt za ukończony.
+
+
+9. SZYBKA LISTA KOLEJNOŚCI DLA SŁABSZEGO MODELU
+===============================================
+
+[ ] 1. Przeczytaj cały ten plik, docs/acceptance.md i aktualny git diff.
+[ ] 2. Nie usuwaj istniejących zmian ani kompletnych danych krajowych.
+[ ] 3. Uruchom pełne testy i Ruff; napraw tylko rzeczywiste regresje.
+[x] 4. Zmierzono odległości między 207 składowymi jednym procesem.
+[x] 5. Potwierdzono równoległe mikroszczeliny granic PRG.
+[x] 6. Zaimplementowano kontrolowaną tolerancję 1 cm bez sztucznych mostów.
+[x] 7. Dodano testy topologii i ponownie zbudowano graph.json.
+[x] 8. Zweryfikowano 28351 węzłów, 89823 krawędzie i jedną składową.
+[ ] 9. Uruchom pełne bramki lokalne i Docker przy limicie 4 CPU.
+[ ] 10. Zsynchronizuj kraj do PostGIS i sprawdź idempotencję/API.
+[ ] 11. Wykonaj ręczny test dużej mapy i benchmark dużej optymalizacji.
+[ ] 12. Zaktualizuj STATUS_PRAC.txt oraz docs/acceptance.md dowodami.
+[ ] 13. Commit, push, obserwacja wszystkich jobów GitHub Actions.
+[ ] 14. Wykonaj końcowy audyt punkt po punkcie; nie ukrywaj opinii eksperta.
