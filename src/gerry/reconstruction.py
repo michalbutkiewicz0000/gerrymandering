@@ -172,7 +172,7 @@ def reconstruct_voronoi(
             center = boundary.representative_point()
             point = Point(center.x + precinct * 1e-8, center.y + precinct * 1e-8)
         points.loc[len(points)] = {"precinct": precinct, "geometry": point}
-        fallback_used.append(precinct)
+        fallback_used.append(int(precinct))
 
     if points.empty:
         raise ValueError("reconstruction requires at least one territorial precinct")

@@ -30,6 +30,10 @@ def _atomic_write_text(path: Path, content: str) -> None:
     temporary.replace(path)
 
 
+def _read_geodata(path: Path) -> gpd.GeoDataFrame:
+    return gpd.read_parquet(path) if path.suffix.lower() in {".parquet", ".pq"} else gpd.read_file(path)
+
+
 @app.command("doctor")
 def doctor() -> None:
     import shutil
@@ -267,7 +271,7 @@ def reconstruct(
 ) -> None:
     if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
         raise typer.BadParameter("Nie znaleziono migawki; najpierw użyj snapshot-create")
-    boundary_frame = gpd.read_file(boundaries) if boundaries else None
+    boundary_frame = _read_geodata(boundaries) if boundaries else None
     if boundary_frame is not None and "teryt" not in boundary_frame:
         raise typer.BadParameter("Warstwa granic musi zawierać kolumnę teryt")
     reports = NationalReconstructionPipeline(

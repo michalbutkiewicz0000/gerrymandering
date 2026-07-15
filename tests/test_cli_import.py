@@ -32,6 +32,24 @@ def test_mapa_obwodow_import_places_prg_in_pipeline_cache(tmp_path, monkeypatch)
     ).read_bytes() == b"registry"
 
 
+def test_geodata_reader_uses_native_parquet_engine(tmp_path, monkeypatch):
+    path = tmp_path / "boundaries.parquet"
+    expected = gpd.GeoDataFrame(
+        {"teryt": ["020101"]}, geometry=[box(0, 0, 1, 1)], crs=4326
+    )
+    expected.to_parquet(path)
+    monkeypatch.setattr(
+        gpd,
+        "read_file",
+        lambda candidate: (_ for _ in ()).throw(AssertionError(candidate)),
+    )
+
+    loaded = cli._read_geodata(path)
+
+    assert loaded.teryt.tolist() == ["020101"]
+    assert loaded.crs == expected.crs
+
+
 def test_solver_smoke_requires_verified_optimum(tmp_path, monkeypatch):
     class SuccessfulSolver:
         def __init__(self, artifact_dir):

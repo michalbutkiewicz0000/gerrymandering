@@ -18,6 +18,18 @@ def test_reconstruction_outputs_are_isolated_by_snapshot(tmp_path):
     assert first.report_dir == tmp_path / "artifacts/reconstruction/snapshot-a"
 
 
+def test_national_area_list_merges_warsaw_and_excludes_foreign_precincts(tmp_path):
+    pipeline = NationalReconstructionPipeline(tmp_path, snapshot_id="snapshot")
+    registry = pd.DataFrame({
+        "teryt": ["020101", "", "146502", "146503", "146519"],
+        "precinct": [1, 2, 711, 749, 999],
+    })
+
+    assert pipeline._area_teryts(registry) == ["020101", "146501"]
+    warsaw = pipeline._registry_for_area(registry, "146501")
+    assert warsaw.teryt.tolist() == ["146502", "146503", "146519"]
+
+
 def test_national_pipeline_reports_every_registry_teryt_missing_a_boundary(
     tmp_path, monkeypatch
 ):

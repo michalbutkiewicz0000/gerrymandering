@@ -69,6 +69,12 @@ Rekonstrukcja obwodów
   `--force` i `--retry-failed`. Ponowienie błędów zachowuje wcześniejsze sukcesy,
   składa warstwę krajową ze wszystkich plików cache i ustawia `complete_country`
   dopiero po obecności wszystkich gmin bez błędu.
+- Pipeline jawnie obsługuje krajowy wyjątek Warszawy: 18 kodów dzielnic PKW
+  `146502–146519` jest rekonstruowanych na wspólnej granicy i cache PRG miasta
+  `146501`, przy zachowaniu oryginalnego TERYT na każdym obwodzie. Komisje
+  zagraniczne z pustym TERYT są raportowane jako wyłączone nieterytorialne,
+  a nie jako brakująca gmina. Audyt lokalnego zbioru potwierdził komplet cache
+  i granic dla wszystkich 2 477 wynikowych obszarów.
 - Obwody odrębne (np. szpitale, zakłady karne, DPS) nie stają się węzłami
   grafu. Są automatycznie przypisywane do obwodu zawierającego lokal komisji,
   a w razie braku trafienia — do najbliższego obwodu.
@@ -259,7 +265,7 @@ Testy i jakość
 - Utworzono testy parsera, rekonstrukcji, grafu, arytmetyki wyborczej,
   walidatora, obu solverów, importera wyników, API, bazy i eksportu.
 - Przeniesiono 26 testów regresyjnych parsera z projektu `mapa_obwodow`.
-- Aktualny wynik lokalny: 111 testów zakończonych powodzeniem i 4 testy
+- Aktualny wynik lokalny: 114 testów zakończonych powodzeniem i 4 testy
   integracyjne pominięte: jeden SCIP/VIPR, ponieważ standardowe koło PyPI nie
   zawiera EXACTSOLVE, oraz trzy PostGIS wykonywane przez CI z prawdziwą usługą.
   Sama
@@ -433,7 +439,7 @@ pełnym sukcesem:
 
 Po wcześniejszym odbiorze audyt dodał niezależną komendę `certificate-verify`, migrację
 złożonych kluczy PostGIS, pełne identyfikatory grafu, raportowanie brakujących
-granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 111 testów
+granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 114 testów
 lokalne, Ruff, kontrolę Compose, JavaScriptu i diff. Najnowszy obraz został
 zbudowany i przeszedł pełną bramkę odbiorczą:
 

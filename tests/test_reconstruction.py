@@ -1,4 +1,5 @@
 import geopandas as gpd
+import numpy as np
 from shapely.geometry import Point, box
 
 from gerry.reconstruction import (
@@ -41,6 +42,21 @@ def test_reconstruction_is_gap_free_and_adds_missing_seed():
     assert report["coverage_ratio"] == 1.0
     assert report["overlap_free"]
     assert report["fallback_precincts"] == [2]
+
+
+def test_reconstruction_report_serializes_numpy_precinct_ids():
+    addresses = gpd.GeoDataFrame(
+        {"precinct": [1]}, geometry=[Point(2, 2)], crs=2180
+    )
+    _, report = reconstruct_voronoi(
+        addresses,
+        box(0, 0, 10, 10),
+        expected_precincts=[np.int64(1), np.int64(2)],
+        fallback_points={2: Point(8, 8)},
+    )
+
+    assert report["fallback_precincts"] == [2]
+    assert isinstance(report["fallback_precincts"][0], int)
 
 
 def test_registry_imports_official_population_column(tmp_path):

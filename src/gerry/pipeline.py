@@ -14,6 +14,10 @@ from .reconstruction import attach_special_precincts, normalize_text, reconstruc
 from .sources import AdministrativeBoundaryClient, PrgClient, load_registry
 
 
+WARSAW_AREA_TERYT = "146501"
+WARSAW_DISTRICT_TERYTS = {f"1465{number:02d}" for number in range(2, 20)}
+
+
 def _atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".part")
@@ -59,6 +63,21 @@ class NationalReconstructionPipeline:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _area_teryts(registry: pd.DataFrame) -> list[str]:
+        teryts = {str(value) for value in registry.teryt if str(value)}
+        has_warsaw = bool(teryts & WARSAW_DISTRICT_TERYTS)
+        teryts -= WARSAW_DISTRICT_TERYTS
+        if has_warsaw:
+            teryts.add(WARSAW_AREA_TERYT)
+        return sorted(teryts)
+
+    @staticmethod
+    def _registry_for_area(registry: pd.DataFrame, teryt: str) -> pd.DataFrame:
+        if teryt == WARSAW_AREA_TERYT:
+            return registry[registry.teryt.astype(str).isin(WARSAW_DISTRICT_TERYTS)].copy()
+        return registry[registry.teryt.astype(str) == teryt].copy()
+
     def reconstruct_gmina(
         self, teryt: str, registry: pd.DataFrame, boundary, *, force: bool = False
     ) -> tuple[gpd.GeoDataFrame, dict]:
@@ -66,7 +85,8 @@ class NationalReconstructionPipeline:
         report_path = self.report_dir / f"{teryt}.json"
         if output.exists() and report_path.exists() and not force:
             return gpd.read_parquet(output), json.loads(report_path.read_text(encoding="utf-8"))
-        subset = registry[(registry.teryt == teryt) & ~registry.special].copy()
+        area_registry = self._registry_for_area(registry, teryt)
+        subset = area_registry[~area_registry.special].copy()
         if subset.empty:
             raise ValueError(f"Brak terytorialnych obwodów dla {teryt}")
         addresses = self.prg.fetch(teryt, self.address_cache)
@@ -80,19 +100,21 @@ class NationalReconstructionPipeline:
             fallback_points={key: gpd.GeoSeries([point], crs=4326).to_crs(2180).iloc[0] for key, point in fallback_points.items()},
         )
         polygons["teryt"] = teryt
-        polygons["key"] = polygons.precinct.map(lambda number: f"{teryt}_{number}")
         if self.snapshot_id:
             polygons["snapshot_id"] = self.snapshot_id
         attributes = subset[
-            ["precinct", "description", "commission", "eligible", "population"]
+            ["precinct", "teryt", "description", "commission", "eligible", "population"]
         ].drop_duplicates("precinct")
-        polygons = polygons.merge(attributes, on="precinct", how="left")
+        polygons = polygons.drop(columns="teryt").merge(attributes, on="precinct", how="left")
+        polygons["key"] = polygons.apply(
+            lambda row: f"{row.teryt}_{row.precinct}", axis=1
+        )
         fallback_precincts = set(report["fallback_precincts"])
         polygons["geometry_quality"] = polygons.precinct.map(
             lambda number: "fallback" if number in fallback_precincts else "generated"
         )
         polygons = polygons.to_crs(4326)
-        attachments = self._attach_special(registry[registry.teryt == teryt], addresses, polygons)
+        attachments = self._attach_special(area_registry, addresses, polygons)
         _atomic_write_text(
             self.report_dir / f"{teryt}_special.json",
             attachments.to_json(orient="records", indent=2, force_ascii=False),
@@ -105,7 +127,7 @@ class NationalReconstructionPipeline:
             "snapshot_id": self.snapshot_id,
             "assignment_rate": float(assigned.precinct.notna().mean()),
             "conflicts": int(((assigned.match_count > 1) & assigned.precinct.isna()).sum()),
-            "special_precincts": int(registry[(registry.teryt == teryt) & registry.special].shape[0]),
+            "special_precincts": int(area_registry[area_registry.special].shape[0]),
             "special_attached": int(len(attachments)),
         })
         _atomic_write_text(
@@ -163,7 +185,7 @@ class NationalReconstructionPipeline:
         if boundaries is None:
             boundaries = AdministrativeBoundaryClient().fetch_gminy(self.data_dir / "raw" / "prg_boundaries").to_crs(4326)
         reports = []
-        registry_teryts = sorted(set(registry.teryt.astype(str)))
+        registry_teryts = self._area_teryts(registry)
         boundary_teryts = set(boundaries.teryt.astype(str))
         requested_teryts = None if teryts is None else {str(value) for value in teryts}
         selected_teryts = registry_teryts
@@ -244,6 +266,7 @@ class NationalReconstructionPipeline:
         run_manifest = {
             "snapshot_id": self.snapshot_id,
             "registry_teryts": len(registry_teryts),
+            "excluded_nonterritorial_precincts": int((registry.teryt.astype(str) == "").sum()),
             "selected_teryts": len(selected_teryts),
             "successful": sum("error" not in report for report in reports),
             "failed": sum("error" in report for report in reports),
