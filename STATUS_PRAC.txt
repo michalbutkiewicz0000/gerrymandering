@@ -209,7 +209,7 @@ API, CLI, interfejs i eksport
   plikowego. Interfejs pobiera ograniczoną stronę zamiast całej historii.
 - Dokumentacja OpenAPI jest dostępna pod `/docs`.
 - CLI udostępnia m.in. doctor, solver-smoke, real-smoke, certificate-verify,
-  migrate, snapshot-create,
+  migrate, postgis-sync, snapshot-create,
   import-mapa-obwodow, reconstruct, graph-build, scenario-import, optimize,
   export i worker.
 - API i CLI korzystają z tych samych modeli oraz serwisów domenowych.
@@ -224,6 +224,15 @@ API, CLI, interfejs i eksport
   tolerancja ludności, limit przeciętej granicy, typy dozwolonych krawędzi oraz
   kotwica kandydata. Edytor JSON pozostaje dla map mandatów i reguł specjalnych.
 - Dodano eksport JSON, CSV, GeoJSON, GeoPackage i raportu HTML.
+- Komenda `gerry postgis-sync` waliduje przynależność artefaktów do migawki,
+  reprojektuje poligony do EPSG:2180 i transakcyjnie synchronizuje migawkę,
+  metadane źródeł, wszystkie obwody oraz graf do PostGIS. Ponowne wykonanie
+  jest idempotentne, a błąd geometrii, TERYT, głosów lub grafu jest wykrywany
+  przed otwarciem transakcji.
+- Lista scenariuszy zwraca stronicowane metadane zamiast pełnej krajowej
+  macierzy głosów; pełne dane pozostają dostępne przez identyfikator.
+- API i interfejs udostępniają stronicowany podgląd raportu rekonstrukcji,
+  kompletność kraju i pierwszą stronę gmin wymagających uwagi.
 
 Docker
 ------
@@ -243,9 +252,9 @@ Testy i jakość
 - Utworzono testy parsera, rekonstrukcji, grafu, arytmetyki wyborczej,
   walidatora, obu solverów, importera wyników, API, bazy i eksportu.
 - Przeniesiono 26 testów regresyjnych parsera z projektu `mapa_obwodow`.
-- Aktualny wynik lokalny: 101 testów zakończonych powodzeniem i 3 testy
+- Aktualny wynik lokalny: 108 testów zakończonych powodzeniem i 4 testy
   integracyjne pominięte: jeden SCIP/VIPR, ponieważ standardowe koło PyPI nie
-  zawiera EXACTSOLVE, oraz dwa PostGIS wykonywane przez CI z prawdziwą usługą.
+  zawiera EXACTSOLVE, oraz trzy PostGIS wykonywane przez CI z prawdziwą usługą.
   Sama
   formulacja SCIP dla JOW i D’Hondta jest wykonywana w testach bez certyfikacji;
   osobny test pilnuje, że taki wynik pozostaje FEASIBLE_CHECKPOINT.
@@ -295,9 +304,8 @@ Testy i jakość
 ============================
 
 - Końcowy audyt zgodności implementacji z pełnym zakresem ustalonego planu.
-- Wykonanie dwóch nowych testów integralności na prawdziwym PostGIS:
-  powtarzalność
-  kluczy obwodów między migawkami i zakaz krawędzi między migawkami.
+- Wykonanie trzech testów na prawdziwym PostGIS w CI: kolejki, integralności
+  kluczy migawkowych oraz idempotentnej synchronizacji geometrii i grafu.
 - Odbiór `real-smoke` wewnątrz najnowszego obrazu z danymi źródłowymi
   zamontowanymi wyłącznie do odczytu.
 - Rozszerzanie testów integracyjnych dużego solvera oraz alternatywnych planów.
@@ -326,17 +334,16 @@ Wymagane przed uznaniem programu za kompletny
    do raportów. Konfigurowana tolerancja ludności jest teraz jawnie opisana jako
    ograniczenie analityczne, a nie ustawowy algorytm normy przedstawicielstwa.
 
-3. Rozszerzyć integrację PostGIS z kolejki na wszystkie duże geometrie i
-   migawki. Kolejka optymalizacji używa już w Dockerze transakcyjnego
-   `FOR UPDATE SKIP LOCKED`, więc wiele workerów nie przejmie tego samego
-   zadania. Backend plikowy pozostał dla prostego trybu lokalnego. Geometrie
-   rekonstrukcji i część artefaktów nadal są przechowywane jako Parquet/GPKG
-   na wolumenie i przed rozproszonym wdrożeniem powinny trafić do PostGIS.
+3. Wykonać próbę synchronizacji pełnej warstwy krajowej do PostGIS. Komenda
+   `postgis-sync` zapisuje już transakcyjnie migawkę, źródła, geometrie i graf,
+   a test CI sprawdza SRID, poprawność geometrii i idempotencję. Przed
+   rozproszonym wdrożeniem pozostaje pomiar czasu oraz pamięci dla wszystkich
+   obwodów i ewentualne strojenie rozmiaru partii zapisu.
 
 4. Dokończyć interfejs WWW ponad wdrożony wybór migawki/scenariusza, mapę,
-   porównanie alternatyw, eksporty i panel certyfikatu: pozostają formularz
-   wszystkich reguł bez edycji JSON, wybór obszaru bezpośrednio na mapie oraz
-   podgląd raportów jakości rekonstrukcji.
+   porównanie alternatyw, eksporty, panel certyfikatu i podgląd raportów
+   jakości: pozostają formularz wszystkich reguł bez edycji JSON oraz wybór
+   obszaru bezpośrednio na mapie.
 
 5. Dodać kontrolowane wznawianie przerwanych zadań SCIP. Sygnał anulowania
     jest już przekazywany do aktywnego enumeratora i przez handler zdarzeń do
@@ -418,7 +425,7 @@ pełnym sukcesem:
 
 Po wcześniejszym odbiorze audyt dodał niezależną komendę `certificate-verify`, migrację
 złożonych kluczy PostGIS, pełne identyfikatory grafu, raportowanie brakujących
-granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 101 testów
+granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 108 testów
 lokalne, Ruff, kontrolę Compose, JavaScriptu i diff. Najnowszy obraz został
 zbudowany i przeszedł pełną bramkę odbiorczą:
 

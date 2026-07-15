@@ -286,6 +286,48 @@ def reconstruct(
         raise typer.Exit(1)
 
 
+@app.command("postgis-sync")
+def postgis_sync(
+    snapshot_id: Annotated[str, typer.Argument(help="Identyfikator migawki danych")],
+    source: Annotated[
+        Path | None,
+        typer.Option(help="Warstwa obwodów; domyślnie precincts.gpkg migawki"),
+    ] = None,
+    graph: Annotated[
+        Path | None,
+        typer.Option(help="Graf JSON; domyślnie graph.json migawki"),
+    ] = None,
+) -> None:
+    """Transactionally synchronize a reconstructed snapshot and graph to PostGIS."""
+    from .postgis_sync import load_graph, prepare_precincts, sync_snapshot_to_postgis
+
+    store = SnapshotStore(settings.raw_dir / "snapshots")
+    snapshot = store.get(snapshot_id)
+    if snapshot is None:
+        raise typer.BadParameter("Nie znaleziono migawki")
+    root = (settings.processed_dir / "snapshots" / snapshot_id).resolve()
+    source_path = (source or root / "precincts.gpkg").resolve()
+    graph_path = (graph or root / "graph.json").resolve()
+    if not source_path.is_relative_to(root) or not graph_path.is_relative_to(root):
+        raise typer.BadParameter("Warstwa i graf muszą należeć do wskazanej migawki")
+    if not source_path.is_file() or not graph_path.is_file():
+        raise typer.BadParameter("Brak warstwy precincts.gpkg albo graph.json")
+    try:
+        frame = gpd.read_file(source_path)
+        prepared = prepare_precincts(frame)
+        edges = load_graph(graph_path, snapshot_id, [item.key for item in prepared])
+        result = sync_snapshot_to_postgis(
+            snapshot, frame, edges, settings.database_url
+        )
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(
+        "Zsynchronizowano PostGIS: "
+        f"migawki={result['snapshots']}, artefakty={result['artifacts']}, "
+        f"obwody={result['precincts']}, krawędzie={result['edges']}"
+    )
+
+
 @app.command("optimize")
 def optimize(
     request_file: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],

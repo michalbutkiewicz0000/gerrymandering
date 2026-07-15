@@ -9,6 +9,7 @@ from shapely.geometry import box
 from gerry import cli
 from gerry.domain import JobStatus
 from gerry import scip_solver
+from gerry import postgis_sync as postgis_sync_module
 from gerry.snapshots import SnapshotStore
 
 
@@ -102,3 +103,46 @@ def test_graph_cli_rejects_source_from_another_snapshot(tmp_path, monkeypatch):
 
     with pytest.raises(typer.BadParameter, match="musi należeć"):
         cli.graph_build(foreign, output, str(snapshot.id))
+
+
+def test_postgis_sync_cli_uses_snapshot_scoped_artifacts(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(cli.settings, "database_url", "postgresql://example")
+    snapshot = SnapshotStore(tmp_path / "raw/snapshots").create(
+        "test-election", date(2026, 1, 1)
+    )
+    root = tmp_path / "processed/snapshots" / str(snapshot.id)
+    root.mkdir(parents=True)
+    gpd.GeoDataFrame(
+        {"key": ["a"], "teryt": ["020101"], "precinct": [1]},
+        geometry=[box(0, 0, 1, 1)],
+        crs=2180,
+    ).to_file(root / "precincts.gpkg", layer="precincts", driver="GPKG")
+    (root / "graph.json").write_text(
+        json.dumps({
+            "snapshot_id": str(snapshot.id),
+            "node_ids": ["a"],
+            "edges": [],
+        }),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_sync(received_snapshot, frame, edges, database_url):
+        captured.update(
+            snapshot=received_snapshot,
+            frame=frame,
+            edges=edges,
+            database_url=database_url,
+        )
+        return {"snapshots": 1, "artifacts": 0, "precincts": 1, "edges": 0}
+
+    monkeypatch.setattr(postgis_sync_module, "sync_snapshot_to_postgis", fake_sync)
+
+    cli.postgis_sync(str(snapshot.id))
+
+    assert captured["snapshot"].id == snapshot.id
+    assert captured["frame"].key.tolist() == ["a"]
+    assert captured["edges"] == []
+    assert captured["database_url"] == "postgresql://example"
+    assert "obwody=1" in capsys.readouterr().out

@@ -50,6 +50,9 @@ gerry graph-build \
   data/processed/snapshots/SNAPSHOT_ID/precincts.gpkg \
   data/processed/snapshots/SNAPSHOT_ID/graph.json \
   --snapshot-id SNAPSHOT_ID
+
+# transakcyjny zapis migawki, geometrii EPSG:2180 i grafu do PostGIS
+docker compose exec -T worker gerry postgis-sync SNAPSHOT_ID
 gerry optimize examples/small_request.json --output data/artifacts/run.json
 ```
 
