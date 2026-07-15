@@ -182,7 +182,17 @@ def reconstruct_voronoi(
     regions = shapely.voronoi_polygons(MultiPoint(points.geometry.tolist()), extend_to=boundary)
     cells = gpd.GeoDataFrame(geometry=list(regions.geoms), crs=assigned.crs)
     joined = gpd.sjoin(cells, points, predicate="contains", how="inner")
-    joined["geometry"] = joined.geometry.intersection(boundary)
+    # GEOS can report a side-location conflict for formally valid inputs whose
+    # segments differ only below floating-point precision. A 1 µm precision
+    # grid in projected data (or a picodegree in geographic data) makes the
+    # overlay robust without changing a meaningful electoral boundary.
+    projected = bool(assigned.crs and assigned.crs.is_projected)
+    grid_size = 1e-6 if projected else 1e-12
+    joined["geometry"] = shapely.intersection(
+        shapely.make_valid(joined.geometry.array),
+        shapely.make_valid(boundary),
+        grid_size=grid_size,
+    )
     result = joined.dissolve(by="precinct").reset_index()[["precinct", "geometry"]]
     result["precinct"] = result["precinct"].astype(int)
     union = result.geometry.union_all()
@@ -192,7 +202,7 @@ def reconstruct_voronoi(
         "precincts_expected": len(expected_precincts),
         "precincts_generated": int(len(result)),
         "fallback_precincts": fallback_used,
-        "coverage_ratio": float(union.area / boundary.area) if boundary.area else 0.0,
+        "coverage_ratio": min(1.0, float(union.area / boundary.area)) if boundary.area else 0.0,
         "overlap_free": abs(sum(result.geometry.area) - union.area) <= max(1e-9, boundary.area * 1e-9),
     }
     return result, report

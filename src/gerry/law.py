@@ -24,6 +24,7 @@ _PROFILE_DOCUMENT = yaml.safe_load(_PROFILE_TEXT)
 LAW_DATE = date.fromisoformat(str(_PROFILE_DOCUMENT["law_snapshot"]))
 LAW_PROFILE_SHA256 = hashlib.sha256(_PROFILE_TEXT.encode("utf-8")).hexdigest()
 LAW_SOURCES = list(_PROFILE_DOCUMENT.get("official_sources", []))
+LAW_DOCUMENTS = list(_PROFILE_DOCUMENT.get("official_documents", []))
 PROFILE_RULES = _PROFILE_DOCUMENT["profiles"]
 for _profile in PROFILE_RULES.values():
     _profile["target_kinds"] = set(_profile["target_kinds"])

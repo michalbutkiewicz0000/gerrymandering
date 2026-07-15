@@ -69,6 +69,13 @@ Rekonstrukcja obwodów
   `--force` i `--retry-failed`. Ponowienie błędów zachowuje wcześniejsze sukcesy,
   składa warstwę krajową ze wszystkich plików cache i ustawia `complete_country`
   dopiero po obecności wszystkich gmin bez błędu.
+- Rekonstrukcje gmin są wykonywane przez konfigurowalną pulę procesów;
+  `--workers 0` używa wszystkich logicznych CPU bez ograniczenia GIL, a tylko
+  proces nadrzędny aktualizuje atomowo wspólny raport. Niepoprawna geometria
+  źródłowa jest naprawiana przez `make_valid`, a błąd pojedynczej gminy nie
+  zatrzymuje kraju.
+- Blokada plikowa migawki odrzuca drugi równoległy przebieg, aby dwa procesy
+  nie mogły jednocześnie nadpisywać raportu krajowego i cache.
 - Pipeline jawnie obsługuje krajowy wyjątek Warszawy: 18 kodów dzielnic PKW
   `146502–146519` jest rekonstruowanych na wspólnej granicy i cache PRG miasta
   `146501`, przy zachowaniu oryginalnego TERYT na każdym obwodzie. Komisje
@@ -86,8 +93,10 @@ Rekonstrukcja obwodów
   `mapa_obwodow`: utworzono 21 z 21 oczekiwanych obwodów, przypisano ok. 95,64%
   adresów, uzyskano pełne pokrycie bez nakładania oraz dołączono 3 z 3 obwodów
   odrębnych.
-- Odczyt całego rzeczywistego rejestru wykrył 31 497 rekordów, 2 495 kodów
-  TERYT oraz 1 766 obwodów odrębnych.
+- Odczyt całego rzeczywistego rejestru wykrył 31 497 rekordów, 2 495 niepustych
+  kodów TERYT oraz 1 766 obwodów odrębnych. Po prawidłowym złączeniu 18 dzielnic
+  Warszawy w jeden obszar rekonstrukcji daje to 2 477 obszarów krajowych;
+  dodatkowe 424 komisje z pustym TERYT są zagraniczne i nieterytorialne.
 - Ponowna próba TERYT 020101 potwierdziła, że wszystkie 21 poligonów zawiera
   przeniesione pola ludności, liczby uprawnionych i jakości geometrii.
 - Dodano powtarzalną komendę `gerry real-smoke`. Pełny przebieg dla rzeczywistej
@@ -166,6 +175,11 @@ Walidacja prawna
 - Profile prawne mają jedno źródło YAML dołączane do paczki Python. Raport
   zawiera SHA-256 dokładnie tej konfiguracji i listę uwzględnionych oficjalnych
   aktów: Dz.U. 2025 poz. 365 i 1792 oraz Dz.U. 2026 poz. 178.
+- Pełne oficjalne PDF-y tych trzech aktów są zarchiwizowane w pakiecie wraz
+  ze stabilnymi adresami ELI, rozmiarami i sumami SHA-256. `gerry law-verify`,
+  `gerry doctor`, test wheel oraz build Dockera wykrywają brak lub zmianę pliku;
+  `gerry law-archive` pobiera wyłącznie z ELI, sprawdza wartości przypięte w
+  profilu i atomowo zastępuje każdy kompletnie pobrany plik.
 - Zaimplementowano ustawowe wyjątki dotyczące dzielenia i łączenia gmin lub
   powiatów zależnie od normy mandatowej, wyjątek miasta powyżej 500 tys.
   mieszkańców w wyborach do Senatu, przedział senackiej normy ludności oraz
@@ -265,7 +279,7 @@ Testy i jakość
 - Utworzono testy parsera, rekonstrukcji, grafu, arytmetyki wyborczej,
   walidatora, obu solverów, importera wyników, API, bazy i eksportu.
 - Przeniesiono 26 testów regresyjnych parsera z projektu `mapa_obwodow`.
-- Aktualny wynik lokalny: 114 testów zakończonych powodzeniem i 4 testy
+- Aktualny wynik lokalny: 120 testów zakończonych powodzeniem i 4 testy
   integracyjne pominięte: jeden SCIP/VIPR, ponieważ standardowe koło PyPI nie
   zawiera EXACTSOLVE, oraz trzy PostGIS wykonywane przez CI z prawdziwą usługą.
   Sama
@@ -317,6 +331,10 @@ Testy i jakość
 ============================
 
 - Końcowy audyt zgodności implementacji z pełnym zakresem ustalonego planu.
+- Trwa równoległy przebieg krajowy wszystkich 2 477 obszarów. Po kontroli
+  temperatury pulę ograniczono z 20 do 6 procesów (około 600% CPU i 1,4 GiB
+  RAM). Pipeline zapisuje wynik każdej gminy atomowo i wznawia pracę z
+  istniejącego cache bez ponownego liczenia sukcesów.
 - Odbiór obrazu exact po ostatniej zmianie synchronizacji PostGIS; job Python,
   obejmujący trzy testy na prawdziwym PostGIS, zakończył się powodzeniem.
 - Odbiór `real-smoke` wewnątrz najnowszego obrazu z danymi źródłowymi
@@ -333,9 +351,11 @@ Testy i jakość
 Wymagane przed uznaniem programu za kompletny
 ---------------------------------------------
 
-1. Uruchomić krajowy pipeline na wszystkich 2 495 jednostkach TERYT. Kod jest
-   przygotowany, ale operacja wymaga pobrania dużej ilości danych PRG i może
-   trwać wiele godzin. Należy zachować raporty błędów i ponowić brakujące gminy.
+1. Dokończyć uruchomiony pipeline na wszystkich 2 477 terytorialnych obszarach
+   rekonstrukcji, sprawdzić `complete_country`, brak błędów oraz komplet 2 477
+   plików cache. Lokalne dane PRG i granice są kompletne; przebieg korzysta z
+   termicznie ograniczonej puli 6 procesów i może być bezpiecznie wznawiany po
+   przerwaniu.
 
 2. Zweryfikować profile prawne z ekspertem wyborczym. Obecny walidator obejmuje
    główne reguły strukturalne, lecz szczególne wyjątki ustawowe (np. warunkowe
@@ -364,12 +384,7 @@ Wymagane przed uznaniem programu za kompletny
     SCIP, a anulowany wynik nie jest publikowany. Pozostaje zapis i odtworzenie
     pełnego stanu drzewa wyszukiwania po restarcie procesu.
 
-6. Zarchiwizować lokalne kopie pełnych tekstów aktów obok profilu prawnego.
-    Każdy raport zawiera już datę migawki, SHA-256 wykonywalnego profilu oraz
-    listę oficjalnych źródeł (Dz.U. 2025 poz. 365 i 1792 oraz Dz.U. 2026
-    poz. 178). Do pełnej archiwizacji offline pozostaje dołączenie samych PDF.
-
-7. Wykonać końcowy test obciążeniowy API i pamięci. Warstwa krajowa i model MIP
+6. Wykonać końcowy test obciążeniowy API i pamięci. Warstwa krajowa i model MIP
     mogą być bardzo duże; potrzebne są pomiary, limity zasobów i stronicowanie
     dużych raportów bez zmniejszania dokładności samej optymalizacji. Lista
     zadań ma już walidowane stronicowanie w API i obu backendach.
@@ -439,7 +454,7 @@ pełnym sukcesem:
 
 Po wcześniejszym odbiorze audyt dodał niezależną komendę `certificate-verify`, migrację
 złożonych kluczy PostGIS, pełne identyfikatory grafu, raportowanie brakujących
-granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 114 testów
+granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 120 testów
 lokalne, Ruff, kontrolę Compose, JavaScriptu i diff. Najnowszy obraz został
 zbudowany i przeszedł pełną bramkę odbiorczą:
 

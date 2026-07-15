@@ -61,6 +61,6 @@ COPY examples ./examples
 COPY frontend ./frontend
 RUN pip install --no-cache-dir /wheels/pyscipopt-*.whl . && \
     python -c "from gerry.scip_solver import exact_scip_available; ok, detail = exact_scip_available(); assert ok, detail" && \
-    command -v viprcomp && command -v viprchk
+    command -v viprcomp && command -v viprchk && gerry law-verify
 EXPOSE 8000
 CMD ["sh", "-c", "gerry migrate && uvicorn gerry.api:app --host 0.0.0.0 --port 8000"]

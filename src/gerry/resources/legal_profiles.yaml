@@ -3,6 +3,25 @@ official_sources:
   - "Dz.U. 2025 poz. 365 — tekst jednolity Kodeksu wyborczego — https://eli.gov.pl/eli/DU/2025/365/ogl"
   - "Dz.U. 2025 poz. 1792 — zmiana terminologii rejestru TERYT — https://eli.gov.pl/eli/DU/2025/1792/ogl"
   - "Dz.U. 2026 poz. 178 — zmiana dotycząca portalu poparcia; przepisy okręgowe bez zmian na dzień migawki — https://eli.gov.pl/eli/DU/2026/178/ogl"
+official_documents:
+  - id: DU-2025-365
+    page_url: "https://eli.gov.pl/eli/DU/2025/365/ogl"
+    pdf_url: "https://eli.gov.pl/api/acts/DU/2025/365/text/T/D20250365L.pdf"
+    filename: D20250365L.pdf
+    sha256: 7e349b2fcdc19892d60ba7fc408203afa2f5ea3f73c10efba9cc31febf440b79
+    bytes: 1490424
+  - id: DU-2025-1792
+    page_url: "https://eli.gov.pl/eli/DU/2025/1792/ogl"
+    pdf_url: "https://eli.gov.pl/api/acts/DU/2025/1792/text/T/D20251792L.pdf"
+    filename: D20251792L.pdf
+    sha256: 4c8a1c6ba4dce8bb47446a6503e17e0422959492dd7d4e0b4aba16c9c54c74a6
+    bytes: 335023
+  - id: DU-2026-178
+    page_url: "https://eli.gov.pl/eli/DU/2026/178/ogl"
+    pdf_url: "https://eli.gov.pl/api/acts/DU/2026/178/text/T/D20260178L.pdf"
+    filename: D20260178L.pdf
+    sha256: ea7261eedd32be7c9cfed13ebe1a9af5658b3ecf57319a81c7a31238d1b7b9ba
+    bytes: 218189
 profiles:
   pl-sejm@2026-07-15:
     method: dhondt

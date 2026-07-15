@@ -1,21 +1,34 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import re
-from collections.abc import Iterable
+from functools import wraps
+from collections.abc import Callable, Iterable
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import shapely
 from shapely.geometry import Point
 
 from .pkw_parser import parse_opis_granic, resolve_obwod
 from .reconstruction import attach_special_precincts, normalize_text, reconstruct_voronoi
 from .sources import AdministrativeBoundaryClient, PrgClient, load_registry
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - production and CI run on Linux
+    fcntl = None
+
 
 WARSAW_AREA_TERYT = "146501"
 WARSAW_DISTRICT_TERYTS = {f"1465{number:02d}" for number in range(2, 20)}
+
+_PROCESS_PIPELINE: NationalReconstructionPipeline | None = None
+_PROCESS_REGISTRY: pd.DataFrame | None = None
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -23,6 +36,56 @@ def _atomic_write_text(path: Path, content: str) -> None:
     temporary = path.with_suffix(path.suffix + ".part")
     temporary.write_text(content, encoding="utf-8")
     temporary.replace(path)
+
+
+def _single_reconstruction_run(function):
+    """Reject a second writer for the same snapshot instead of corrupting progress."""
+
+    @wraps(function)
+    def locked(self, *args, **kwargs):
+        lock_path = self.report_dir / ".run.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise RuntimeError(
+                        f"Inny przebieg rekonstrukcji już zapisuje {self.snapshot_id}"
+                    ) from exc
+            try:
+                return function(self, *args, **kwargs)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+    return locked
+
+
+def _initialize_reconstruction_process(
+    data_dir: Path, snapshot_id: str | None, registry: pd.DataFrame
+) -> None:
+    """Create process-local state once instead of serializing the registry per area."""
+    global _PROCESS_PIPELINE, _PROCESS_REGISTRY
+    _PROCESS_PIPELINE = NationalReconstructionPipeline(
+        data_dir, snapshot_id=snapshot_id
+    )
+    _PROCESS_REGISTRY = registry
+
+
+def _reconstruct_area_in_process(
+    teryt: str, boundary_parts: list, force: bool
+) -> dict:
+    if _PROCESS_PIPELINE is None or _PROCESS_REGISTRY is None:
+        raise RuntimeError("Proces rekonstrukcji nie został zainicjalizowany")
+    valid_parts = [
+        geometry if geometry.is_valid else shapely.make_valid(geometry)
+        for geometry in boundary_parts
+    ]
+    boundary = shapely.union_all(valid_parts)
+    _polygons, report = _PROCESS_PIPELINE.reconstruct_gmina(
+        teryt, _PROCESS_REGISTRY, boundary, force=force
+    )
+    return report
 
 
 def assign_with_pkw_parser(addresses: gpd.GeoDataFrame, registry: pd.DataFrame) -> gpd.GeoDataFrame:
@@ -171,6 +234,7 @@ class NationalReconstructionPipeline:
         special_keys = pd.DataFrame({"key": [item["key"] for item in points]})
         return attach_special_precincts(special_keys, polygons[["key", "geometry"]], commission_points)
 
+    @_single_reconstruction_run
     def run(
         self,
         registry_path: Path,
@@ -180,7 +244,12 @@ class NationalReconstructionPipeline:
         teryts: Iterable[str] | None = None,
         retry_failed: bool = False,
         force: bool = False,
+        workers: int = 0,
+        progress_callback: Callable[[int, int, dict | None], None] | None = None,
     ) -> list[dict]:
+        if workers < 0:
+            raise ValueError("Liczba workerów nie może być ujemna")
+        worker_count = workers or os.cpu_count() or 1
         registry = load_registry(registry_path)
         if boundaries is None:
             boundaries = AdministrativeBoundaryClient().fetch_gminy(self.data_dir / "raw" / "prg_boundaries").to_crs(4326)
@@ -209,14 +278,54 @@ class NationalReconstructionPipeline:
             selected_teryts = selected_teryts[:limit]
         summary = self.report_dir / "national.json"
         cumulative = {str(item["teryt"]): item for item in previous}
-        for teryt in selected_teryts:
+        boundary_parts: dict[str, list] = {}
+        for row in boundaries[["teryt", "geometry"]].itertuples(index=False):
+            boundary_parts.setdefault(str(row.teryt), []).append(row.geometry)
+
+        def process_area(teryt: str) -> dict:
             if teryt not in boundary_teryts:
-                result = {
+                return {
                     "teryt": teryt,
                     "error": "MissingBoundary: brak granicy administracyjnej dla TERYT",
                 }
+            try:
+                valid_parts = [
+                    geometry if geometry.is_valid else shapely.make_valid(geometry)
+                    for geometry in boundary_parts[teryt]
+                ]
+                boundary = shapely.union_all(valid_parts)
+                _polygons, report = self.reconstruct_gmina(
+                    teryt, registry, boundary, force=force
+                )
+                return report
+            except Exception as exc:
+                return {"teryt": teryt, "error": f"{type(exc).__name__}: {exc}"}
+
+        # Existing results are cheap to read in the parent. Each process owns a
+        # separate PrgClient/Session, so both uncached downloads and CPU work are
+        # isolated; Python parsing is no longer serialized by GIL.
+        pending: list[str] = []
+        for teryt in selected_teryts:
+            output = self.output_dir / f"{teryt}.parquet"
+            report_path = self.report_dir / f"{teryt}.json"
+            if output.exists() and report_path.exists() and not force:
+                result = json.loads(report_path.read_text(encoding="utf-8"))
                 reports.append(result)
                 cumulative[teryt] = result
+            else:
+                pending.append(teryt)
+        if progress_callback:
+            progress_callback(len(reports), len(selected_teryts), None)
+
+        if not pending:
+            pass
+        elif worker_count == 1:
+            results = ((teryt, process_area(teryt)) for teryt in pending)
+            for teryt, result in results:
+                reports.append(result)
+                cumulative[teryt] = result
+                if progress_callback:
+                    progress_callback(len(reports), len(selected_teryts), result)
                 _atomic_write_text(
                     summary,
                     json.dumps(
@@ -225,25 +334,88 @@ class NationalReconstructionPipeline:
                         indent=2,
                     ),
                 )
-                continue
-            boundary = boundaries.loc[boundaries.teryt.astype(str) == teryt].geometry.union_all()
-            try:
-                _polygons, report = self.reconstruct_gmina(
-                    teryt, registry, boundary, force=force
-                )
-                result = report
-            except Exception as exc:
-                result = {"teryt": teryt, "error": f"{type(exc).__name__}: {exc}"}
-            reports.append(result)
-            cumulative[teryt] = result
-            _atomic_write_text(
-                summary,
-                json.dumps(
-                    [cumulative[key] for key in sorted(cumulative)],
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-            )
+        elif "reconstruct_gmina" in self.__dict__:
+            # An instance-level replacement is a test/custom hook and may not be
+            # pickleable. Keep its documented parallel semantics with threads.
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(process_area, teryt): teryt for teryt in pending
+                }
+                for future in as_completed(futures):
+                    teryt = futures[future]
+                    result = future.result()
+                    reports.append(result)
+                    cumulative[teryt] = result
+                    if progress_callback:
+                        progress_callback(len(reports), len(selected_teryts), result)
+                    _atomic_write_text(
+                        summary,
+                        json.dumps(
+                            [cumulative[key] for key in sorted(cumulative)],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    )
+        else:
+            process_count = min(worker_count, max(1, len(pending)))
+            with ProcessPoolExecutor(
+                max_workers=process_count,
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_initialize_reconstruction_process,
+                initargs=(self.data_dir, self.snapshot_id, registry),
+            ) as executor:
+                futures = {
+                    executor.submit(
+                        _reconstruct_area_in_process,
+                        teryt,
+                        boundary_parts.get(teryt, []),
+                        force,
+                    ): teryt
+                    for teryt in pending
+                    if teryt in boundary_teryts
+                }
+                for teryt in pending:
+                    if teryt not in boundary_teryts:
+                        result = {
+                            "teryt": teryt,
+                            "error": "MissingBoundary: brak granicy administracyjnej dla TERYT",
+                        }
+                        reports.append(result)
+                        cumulative[teryt] = result
+                        if progress_callback:
+                            progress_callback(
+                                len(reports), len(selected_teryts), result
+                            )
+                for future in as_completed(futures):
+                    teryt = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        result = {
+                            "teryt": teryt,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    reports.append(result)
+                    cumulative[teryt] = result
+                    if progress_callback:
+                        progress_callback(len(reports), len(selected_teryts), result)
+                    _atomic_write_text(
+                        summary,
+                        json.dumps(
+                            [cumulative[key] for key in sorted(cumulative)],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    )
+        _atomic_write_text(
+            summary,
+            json.dumps(
+                [cumulative[key] for key in sorted(cumulative)],
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        reports.sort(key=lambda item: str(item["teryt"]))
         cached = sorted(self.output_dir.glob("*.parquet"))
         if cached:
             national = gpd.GeoDataFrame(
@@ -268,8 +440,14 @@ class NationalReconstructionPipeline:
             "registry_teryts": len(registry_teryts),
             "excluded_nonterritorial_precincts": int((registry.teryt.astype(str) == "").sum()),
             "selected_teryts": len(selected_teryts),
-            "successful": sum("error" not in report for report in reports),
-            "failed": sum("error" in report for report in reports),
+            "workers": worker_count,
+            "processed_this_run": len(reports),
+            "successful_this_run": sum("error" not in report for report in reports),
+            "failed_this_run": sum("error" in report for report in reports),
+            "successful": sum(
+                "error" not in report for report in cumulative.values()
+            ),
+            "failed": sum("error" in report for report in cumulative.values()),
             "cached_municipalities": len(cached),
             "complete_country": (
                 len(cumulative) == len(registry_teryts)

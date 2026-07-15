@@ -11,6 +11,7 @@ jednostkowy nie zastępuje próby integracyjnej wskazanej w tej samej pozycji.
 | Import scenariuszy | `tests/test_scenario_import.py` | pełny ZIP PKW Sejm 2023: 12 komitetów bez pól frekwencji | wykonane |
 | Arytmetyka wyborcza | `tests/test_elections.py` | porównanie znanych wyników JOW/D’Hondta | wykonane |
 | Walidacja prawna | `tests/test_law_conditions.py`, profil YAML z SHA-256 | niezależna kontrola eksperta dla migawki prawa | implementacja głównych reguł wykonana; opinia eksperta oczekuje |
+| Archiwum prawa | `tests/test_law_archive.py`, manifest SHA-256 i trzy PDF-y ELI | `gerry law-verify`, kontrola wheel i build obrazu | wykonane |
 | Mały solver dokładny | `tests/test_solver.py` | replay certyfikatu enumeracji | wykonane |
 | Duży solver dokładny | `tests/test_scip_solver.py` | `gerry solver-smoke`: zweryfikowane `OPTIMAL` i `INFEASIBLE` | manifest v2 odebrany w obrazie |
 | Kolejka, geometrie i klucze PostGIS | `tests/test_postgres_integration.py`, `tests/test_postgis_sync.py` i migracje SQL | `/ready`, `gerry postgis-sync`, zdrowy PostGIS, API i worker | odebrane w CI: kolejka, klucze, SRID, poprawność geometrii i idempotencja synchronizacji |

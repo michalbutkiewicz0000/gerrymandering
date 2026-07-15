@@ -38,6 +38,7 @@ def _read_geodata(path: Path) -> gpd.GeoDataFrame:
 def doctor() -> None:
     import shutil
 
+    from .law_archive import verify_law_archive
     from .scip_solver import exact_scip_available
 
     settings.ensure_dirs()
@@ -45,13 +46,48 @@ def doctor() -> None:
     viprcomp = shutil.which("viprcomp") is not None
     viprchk = shutil.which("viprchk") is not None
     certified = exact and viprcomp and viprchk
+    law_archive_valid, law_archive_detail = verify_law_archive()
     typer.echo(
         f"Python i konfiguracja: OK\nDane: {settings.data_dir.resolve()}\n"
         f"Prawo: {settings.law_snapshot}\nSolver exact: {'OK' if exact else 'NIEDOSTĘPNY'} ({detail})\n"
         f"VIPR: {'OK' if viprcomp and viprchk else 'NIEDOSTĘPNY'} "
         f"(viprcomp={'tak' if viprcomp else 'nie'}, viprchk={'tak' if viprchk else 'nie'})\n"
-        f"Certyfikacja dużych zadań: {'OK' if certified else 'NIEDOSTĘPNA'}"
+        f"Certyfikacja dużych zadań: {'OK' if certified else 'NIEDOSTĘPNA'}\n"
+        f"Archiwum prawa: {'OK' if law_archive_valid else 'BŁĄD'} ({law_archive_detail})"
     )
+
+
+@app.command("law-archive")
+def law_archive_command(
+    output: Annotated[
+        Path,
+        typer.Argument(help="Katalog docelowy PDF-ów i manifestu SHA-256"),
+    ] = Path("src/gerry/resources/legal"),
+) -> None:
+    """Download the frozen official ELI documents into a verifiable archive."""
+    from .law_archive import archive_law_sources, verify_law_archive
+
+    manifest = archive_law_sources(output)
+    valid, detail = verify_law_archive(output)
+    if not valid:
+        raise typer.BadParameter(detail)
+    typer.echo(f"{detail}; manifest: {output / 'manifest.json'}; pliki: {len(manifest['documents'])}")
+
+
+@app.command("law-verify")
+def law_verify(
+    archive: Annotated[
+        Path | None,
+        typer.Argument(help="Opcjonalny katalog archiwum; domyślnie zasób pakietu"),
+    ] = None,
+) -> None:
+    """Verify hashes and source bindings of the frozen legal archive."""
+    from .law_archive import verify_law_archive
+
+    valid, detail = verify_law_archive(archive)
+    typer.echo(detail)
+    if not valid:
+        raise typer.Exit(1)
 
 
 @app.command("solver-smoke")
@@ -268,12 +304,26 @@ def reconstruct(
         bool, typer.Option(help="Ponów wyłącznie błędy z poprzedniego national.json")
     ] = False,
     force: Annotated[bool, typer.Option(help="Przelicz także istniejący cache")] = False,
+    workers: Annotated[
+        int,
+        typer.Option(help="Liczba równoległych workerów; 0 = wszystkie logiczne CPU"),
+    ] = 0,
 ) -> None:
     if SnapshotStore(settings.raw_dir / "snapshots").get(snapshot_id) is None:
         raise typer.BadParameter("Nie znaleziono migawki; najpierw użyj snapshot-create")
     boundary_frame = _read_geodata(boundaries) if boundaries else None
     if boundary_frame is not None and "teryt" not in boundary_frame:
         raise typer.BadParameter("Warstwa granic musi zawierać kolumnę teryt")
+
+    def report_progress(completed: int, total: int, report: dict | None) -> None:
+        if report is None:
+            typer.echo(f"Cache: {completed}/{total}")
+        elif completed == total or completed % 25 == 0 or "error" in report:
+            detail = f"; BŁĄD: {report['error']}" if "error" in report else ""
+            typer.echo(
+                f"Postęp: {completed}/{total}; TERYT {report['teryt']}{detail}"
+            )
+
     reports = NationalReconstructionPipeline(
         settings.data_dir, snapshot_id=snapshot_id
     ).run(
@@ -283,6 +333,8 @@ def reconstruct(
         teryts=[value.strip() for value in teryt.split(",") if value.strip()] or None,
         retry_failed=retry_failed,
         force=force,
+        workers=workers,
+        progress_callback=report_progress,
     )
     failed = sum("error" in report for report in reports)
     typer.echo(f"Przetworzono {len(reports)} gmin; błędy: {failed}")

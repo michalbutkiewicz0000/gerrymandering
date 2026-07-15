@@ -44,6 +44,7 @@ class ReconstructionCreate(BaseModel):
     teryts: list[str] | None = None
     retry_failed: bool = False
     force: bool = False
+    workers: int = Field(default=0, ge=0)
 
 
 class GraphCreate(BaseModel):
@@ -248,6 +249,7 @@ def run_reconstruction(body: ReconstructionCreate) -> dict:
         teryts=body.teryts,
         retry_failed=body.retry_failed,
         force=body.force,
+        workers=body.workers,
     )
     return {"processed": len(reports), "failed": sum("error" in report for report in reports), "reports": reports}
 

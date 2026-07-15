@@ -53,6 +53,7 @@ gerry graph-build \
 
 # transakcyjny zapis migawki, geometrii EPSG:2180 i grafu do PostGIS
 docker compose exec -T worker gerry postgis-sync SNAPSHOT_ID
+docker compose exec -T worker gerry law-verify
 gerry optimize examples/small_request.json --output data/artifacts/run.json
 ```
 
@@ -65,9 +66,12 @@ gerry reconstruct data/raw/imports/mapa_obwodow/sejm2023/obwody_glosowania_utf8.
   --snapshot-id SNAPSHOT_ID --retry-failed
 ```
 
-Do pilotażu służy `--teryt 020302,020402` albo `--limit N`; pełny manifest
-ustawia `complete_country: true` dopiero po przetworzeniu całego rejestru bez
-błędów i obecności pliku cache każdej gminy.
+Do pilotażu służy `--teryt 020302,020402` albo `--limit N`. Pełny przebieg
+można liczyć równolegle przez `--workers 0` (wszystkie logiczne CPU) albo
+ograniczyć jawnie, np. `--workers 8`. Manifest ustawia `complete_country: true`
+dopiero po przetworzeniu całego rejestru bez błędów i obecności pliku cache
+każdej gminy. CLI najpierw pokazuje liczbę wyników znalezionych w cache, a
+następnie raportuje postęp co 25 obszarów oraz każdy błąd osobno.
 
 API rekonstrukcji i grafu również wymaga `snapshot_id`. Ścieżki podawane do
 API muszą znajdować się wewnątrz `GERRY_DATA_DIR`; wynik grafu jest zapisywany

@@ -54,6 +54,7 @@ jobs:
           grep -F "Solver exact: OK" <<<"$output"
           grep -F "VIPR: OK" <<<"$output"
           grep -F "Certyfikacja dużych zadań: OK" <<<"$output"
+          grep -F "Archiwum prawa: OK" <<<"$output"
           docker run --rm --entrypoint sh gerrymandering-pl:test -c \
             'command -v viprcomp && command -v viprchk'
       - name: Generate and verify an exact SCIP certificate
