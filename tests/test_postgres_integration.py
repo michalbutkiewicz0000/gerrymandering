@@ -59,22 +59,24 @@ def test_precinct_keys_and_edges_are_scoped_to_snapshot(monkeypatch):
     first, second = uuid4(), uuid4()
     with psycopg.connect(dsn) as connection:
         connection.execute("TRUNCATE data_snapshots CASCADE")
-        connection.executemany(
-            """
-            INSERT INTO data_snapshots(id, election_id, effective_date, status)
-            VALUES (%s, %s, DATE '2026-01-01', 'READY')
-            """,
-            [(first, "first"), (second, "second")],
-        )
-        for snapshot in (first, second):
-            connection.executemany(
+        with connection.cursor() as cursor:
+            cursor.executemany(
                 """
-                INSERT INTO precincts(
-                    key, snapshot_id, teryt, number, quality
-                ) VALUES (%s, %s, '020101', %s, 'official')
+                INSERT INTO data_snapshots(id, election_id, effective_date, status)
+                VALUES (%s, %s, DATE '2026-01-01', 'READY')
                 """,
-                [("same-key", snapshot, 1), ("z", snapshot, 2)],
+                [(first, "first"), (second, "second")],
             )
+        for snapshot in (first, second):
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO precincts(
+                        key, snapshot_id, teryt, number, quality
+                    ) VALUES (%s, %s, '020101', %s, 'official')
+                    """,
+                    [("same-key", snapshot, 1), ("z", snapshot, 2)],
+                )
         connection.execute(
             """
             INSERT INTO precincts(key, snapshot_id, teryt, number, quality)

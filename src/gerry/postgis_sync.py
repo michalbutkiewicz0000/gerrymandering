@@ -121,6 +121,11 @@ def load_graph(path: Path, snapshot_id: str, node_ids: list[str]) -> list[Adjace
     return edges
 
 
+def _executemany(connection, statement: str, rows: list[tuple]) -> None:
+    with connection.cursor() as cursor:
+        cursor.executemany(statement, rows)
+
+
 def sync_snapshot_to_postgis(
     snapshot: DataSnapshot,
     frame: gpd.GeoDataFrame,
@@ -158,7 +163,8 @@ def sync_snapshot_to_postgis(
         )
         connection.execute("DELETE FROM source_artifacts WHERE snapshot_id = %s", (snapshot.id,))
         if snapshot.artifacts:
-            connection.executemany(
+            _executemany(
+                connection,
                 """
                 INSERT INTO source_artifacts(snapshot_id, source, url, local_path, sha256)
                 VALUES (%s, %s, %s, %s, %s)
@@ -170,7 +176,8 @@ def sync_snapshot_to_postgis(
             )
         connection.execute("DELETE FROM adjacency_edges WHERE snapshot_id = %s", (snapshot.id,))
         connection.execute("DELETE FROM precincts WHERE snapshot_id = %s", (snapshot.id,))
-        connection.executemany(
+        _executemany(
+            connection,
             """
             INSERT INTO precincts(
               key, snapshot_id, teryt, number, special, population, eligible,
@@ -198,7 +205,8 @@ def sync_snapshot_to_postgis(
             ],
         )
         if edges:
-            connection.executemany(
+            _executemany(
+                connection,
                 """
                 INSERT INTO adjacency_edges(
                   snapshot_id, source, target, shared_border_m, kind
