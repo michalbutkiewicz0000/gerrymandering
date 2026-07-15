@@ -288,6 +288,10 @@ class ScipExactSolver:
             model.addCons(cut_expression <= floor(request.rules.max_cut_border_m * 1000))
 
         parties = sorted({party for votes in request.scenario.votes_by_unit.values() for party in votes})
+        # Committee names carry spaces (e.g. "KOALICYJNY KOMITET WYBORCZY …") and the
+        # VIPR certificate writer rejects variable names with whitespace, so index
+        # committees by their stable position in the sorted list for SCIP names.
+        party_index = {party: index for index, party in enumerate(parties)}
         national_votes = {
             party: sum(votes.get(party, 0) for votes in request.scenario.votes_by_unit.values())
             for party in parties
@@ -342,7 +346,7 @@ class ScipExactSolver:
                 slots = [(party, divisor) for party in eligible for divisor in range(1, seats_d + 1)]
                 for party, divisor in slots:
                     quotient_selected[party, divisor, d] = model.addVar(
-                        vtype="B", name=f"quot_{party}_{divisor}_{d}"
+                        vtype="B", name=f"quot_p{party_index[party]}_{divisor}_{d}"
                     )
                     if divisor > 1:
                         model.addCons(

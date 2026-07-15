@@ -52,6 +52,47 @@ def test_scip_proportional_matches_exhaustive_oracle(tmp_path):
     assert oracle.incumbent.target_seats == scip.incumbent.target_seats
 
 
+def test_scip_variable_names_stay_whitespace_free_for_spaced_committees(tmp_path, monkeypatch):
+    # Real PKW committee names carry spaces; the VIPR certificate writer refuses
+    # variable names with whitespace, so no SCIP variable may embed the raw name.
+    import pyscipopt
+
+    seen_names: list[str] = []
+
+    class RecordingModel(pyscipopt.Model):
+        def addVar(self, *args, **kwargs):
+            if "name" in kwargs:
+                seen_names.append(kwargs["name"])
+            return super().addVar(*args, **kwargs)
+
+    monkeypatch.setattr(pyscipopt, "Model", RecordingModel)
+    committee = "KOALICYJNY KOMITET WYBORCZY KOALICJA OBYWATELSKA PO .N IPL ZIELONI"
+    nodes = ["a", "b", "c", "d"]
+    request = OptimizationRequest(
+        profile_id="generic-proportional", target_kind="committee", target=committee, nodes=nodes,
+        edges=[
+            AdjacencyEdge(source="a", target="b", shared_border_m=1),
+            AdjacencyEdge(source="b", target="c", shared_border_m=1),
+            AdjacencyEdge(source="c", target="d", shared_border_m=1),
+        ],
+        rules=DistrictRules(district_count=2, seats_per_district=3, population_tolerance=0),
+        scenario=VoteScenario(
+            name="spaced", population_by_unit={node: 100 for node in nodes},
+            votes_by_unit={
+                "a": {committee: 60, "B": 40}, "b": {committee: 10, "B": 90},
+                "c": {committee: 60, "B": 40}, "d": {committee: 10, "B": 90},
+            },
+        ), alternatives=1,
+    )
+
+    run = ScipJowSolver(tmp_path, require_exact=False).solve(request)
+
+    assert run.status == JobStatus.feasible_checkpoint
+    assert seen_names, "the model must create named variables"
+    offenders = [name for name in seen_names if any(character.isspace() for character in name)]
+    assert offenders == []
+
+
 def test_non_exact_scip_is_never_reported_as_certified(tmp_path):
     if exact_scip_available()[0]:
         pytest.skip("test dotyczy standardowego koła PyPI bez EXACTSOLVE")
