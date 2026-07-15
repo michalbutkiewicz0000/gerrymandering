@@ -30,9 +30,10 @@
         <label>Mandaty w okręgu<input id="seats" type="text" value="1" title="Liczba albo obiekt JSON"></label>
         <label>Tolerancja ludności<input id="population-tolerance" type="number" min="0" max="0.999999" step="0.01" value="0.1"></label>
         <label>Limit przeciętej granicy (m)<input id="max-cut-border" type="number" min="0" step="0.1" placeholder="bez limitu"></label>
+        <label>Niepodzielny poziom nadrzędny<input id="indivisible-parent-level" type="text" placeholder="np. gmina; puste = brak"></label>
         <label>Dozwolone sąsiedztwo<select id="edge-kinds" multiple><option value="physical" selected>fizyczne</option><option value="bridge">most</option><option value="ferry">prom</option></select></label>
       </div>
-      <div class="actions"><button id="load-data" type="button">Załaduj graf i scenariusz</button><span id="load-data-status"></span></div>
+      <div class="actions"><button id="load-data" type="button">Załaduj dane i wybierz obszar</button><button id="select-all" type="button" disabled>Zaznacz wszystko</button><span id="load-data-status"></span></div>
       <textarea id="request" spellcheck="false"></textarea>
       <div class="actions"><button id="submit">Uruchom dokładny solver</button><span id="submit-status"></span></div>
     </section>

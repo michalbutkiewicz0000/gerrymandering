@@ -166,6 +166,27 @@ def list_snapshots() -> list[DataSnapshot]:
     return snapshot_store.list()
 
 
+@app.get("/api/snapshots/{snapshot_id}/precincts")
+def get_snapshot_precincts(snapshot_id: UUID) -> dict:
+    if snapshot_store.get(snapshot_id) is None:
+        raise HTTPException(status_code=404, detail="Nie znaleziono migawki")
+    path = settings.processed_dir / "snapshots" / str(snapshot_id) / "precincts.gpkg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Brak geometrii obwodów migawki")
+    frame = gpd.read_file(path)
+    if frame.crs is None or "key" not in frame or frame["key"].astype(str).duplicated().any():
+        raise HTTPException(status_code=409, detail="Niepoprawna warstwa obwodów migawki")
+    if frame.geometry.isna().any() or frame.geometry.is_empty.any() or (~frame.geometry.is_valid).any():
+        raise HTTPException(status_code=409, detail="Warstwa zawiera niepoprawne geometrie")
+    geometry = frame.to_crs(4326)
+    payload = gpd.GeoDataFrame(
+        {"node": geometry["key"].astype(str)},
+        geometry=geometry.geometry,
+        crs=4326,
+    )
+    return json.loads(payload.to_json(drop_id=True))
+
+
 @app.post("/api/scenarios", response_model=VoteScenario, status_code=201)
 def create_scenario(scenario: VoteScenario) -> VoteScenario:
     root = settings.artifacts_dir / "scenarios"

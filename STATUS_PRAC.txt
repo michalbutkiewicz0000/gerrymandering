@@ -222,7 +222,14 @@ API, CLI, interfejs i eksport
   MultiPolygon i otwory oraz nie przepełnia stosu przy dużej liczbie punktów.
 - Typowy wariant można skonfigurować formularzem: liczba okręgów i mandatów,
   tolerancja ludności, limit przeciętej granicy, typy dozwolonych krawędzi oraz
-  kotwica kandydata. Edytor JSON pozostaje dla map mandatów i reguł specjalnych.
+  kotwica kandydata i niepodzielny poziom nadrzędny. Formularz obejmuje każde
+  pole modelu `DistrictRules`; edytor JSON pozostaje dla map jednostek i reguł
+  specjalnych.
+- Po załadowaniu migawki interfejs pobiera jej zweryfikowaną geometrię GeoJSON.
+  Kliknięciem poligonu można wybrać obszar analizy; program spójnie filtruje
+  węzły, krawędzie, głosy, ludność, uprawnionych, geometrie i wszystkie
+  mapowania jednostek. Usunięto przy tym błąd pozostawiający przykładowe
+  geometrie `a–d` po przejściu na rzeczywisty graf.
 - Dodano eksport JSON, CSV, GeoJSON, GeoPackage i raportu HTML.
 - Komenda `gerry postgis-sync` waliduje przynależność artefaktów do migawki,
   reprojektuje poligony do EPSG:2180 i transakcyjnie synchronizuje migawkę,
@@ -252,7 +259,7 @@ Testy i jakość
 - Utworzono testy parsera, rekonstrukcji, grafu, arytmetyki wyborczej,
   walidatora, obu solverów, importera wyników, API, bazy i eksportu.
 - Przeniesiono 26 testów regresyjnych parsera z projektu `mapa_obwodow`.
-- Aktualny wynik lokalny: 108 testów zakończonych powodzeniem i 4 testy
+- Aktualny wynik lokalny: 111 testów zakończonych powodzeniem i 4 testy
   integracyjne pominięte: jeden SCIP/VIPR, ponieważ standardowe koło PyPI nie
   zawiera EXACTSOLVE, oraz trzy PostGIS wykonywane przez CI z prawdziwą usługą.
   Sama
@@ -340,10 +347,11 @@ Wymagane przed uznaniem programu za kompletny
    rozproszonym wdrożeniem pozostaje pomiar czasu oraz pamięci dla wszystkich
    obwodów i ewentualne strojenie rozmiaru partii zapisu.
 
-4. Dokończyć interfejs WWW ponad wdrożony wybór migawki/scenariusza, mapę,
-   porównanie alternatyw, eksporty, panel certyfikatu i podgląd raportów
-   jakości: pozostają formularz wszystkich reguł bez edycji JSON oraz wybór
-   obszaru bezpośrednio na mapie.
+4. Wykonać ręczny odbiór interfejsu w docelowej przeglądarce na rzeczywistej
+   migawce. Automatyczne testy obejmują komplet pól `DistrictRules`, wybór
+   obszaru na mapie, spójne filtrowanie danych, alternatywy, eksporty, panel
+   certyfikatu i raport jakości, ale nie zastępują kontroli ergonomii kliknięć
+   na dużej warstwie krajowej.
 
 5. Dodać kontrolowane wznawianie przerwanych zadań SCIP. Sygnał anulowania
     jest już przekazywany do aktywnego enumeratora i przez handler zdarzeń do
@@ -425,7 +433,7 @@ pełnym sukcesem:
 
 Po wcześniejszym odbiorze audyt dodał niezależną komendę `certificate-verify`, migrację
 złożonych kluczy PostGIS, pełne identyfikatory grafu, raportowanie brakujących
-granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 108 testów
+granic oraz nowe endpointy i elementy interfejsu. Zmiany przechodzą 111 testów
 lokalne, Ruff, kontrolę Compose, JavaScriptu i diff. Najnowszy obraz został
 zbudowany i przeszedł pełną bramkę odbiorczą:
 

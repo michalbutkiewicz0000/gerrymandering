@@ -18,6 +18,7 @@ from gerry.api import (
     get_graph,
     get_optimization_certificate,
     get_reconstruction_report,
+    get_snapshot_precincts,
     health,
     list_optimizations,
     list_scenarios,
@@ -209,6 +210,28 @@ def test_api_builds_and_persists_graph_inside_snapshot(tmp_path, monkeypatch):
 
     loaded = get_graph(snapshot_id)
     assert loaded["node_ids"] == ["a", "b"]
+
+
+def test_api_returns_snapshot_precinct_geometry_as_geojson(tmp_path, monkeypatch):
+    snapshot_id = uuid4()
+    monkeypatch.setattr(api_module.settings, "data_dir", tmp_path)
+    monkeypatch.setattr(api_module.snapshot_store, "get", lambda candidate: object())
+    root = tmp_path / "processed/snapshots" / str(snapshot_id)
+    root.mkdir(parents=True)
+    gpd.GeoDataFrame(
+        {"key": ["a", "b"], "private_column": ["secret-a", "secret-b"]},
+        geometry=[box(0, 0, 10, 10), box(10, 0, 20, 10)],
+        crs=2180,
+    ).to_file(root / "precincts.gpkg", layer="precincts", driver="GPKG")
+
+    payload = get_snapshot_precincts(snapshot_id)
+
+    assert payload["type"] == "FeatureCollection"
+    assert [feature["properties"] for feature in payload["features"]] == [
+        {"node": "a"},
+        {"node": "b"},
+    ]
+    assert all(feature["geometry"]["type"] == "Polygon" for feature in payload["features"])
 
 
 def test_api_rejects_legacy_graph_without_node_ids(tmp_path, monkeypatch):

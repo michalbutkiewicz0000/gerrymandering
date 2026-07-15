@@ -1,8 +1,9 @@
 const escapeHtml=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 function coordinatePairs(value,result=[]){if(Array.isArray(value)&&value.length>=2&&typeof value[0]==='number'&&typeof value[1]==='number'){result.push(value);return result}if(Array.isArray(value))value.forEach(child=>coordinatePairs(child,result));return result}
 const svgNamespace='http://www.w3.org/2000/svg',districtColors=['#2e7d63','#d7903f','#526ea8','#a85967','#8a6d3b','#5d8f91','#8064a2','#789447'];
+let loadedGraph=null,loadedScenario=null,loadedGeometry=null,selectedNodes=new Set();
 function geometryPolygons(geometry){if(!geometry)return[];if(geometry.type==='Polygon')return[geometry.coordinates];if(geometry.type==='MultiPolygon')return geometry.coordinates;return[]}
-function renderGeoJson(data){
+function renderGeoJson(data,{selectable=false}={}){
   const svg=document.querySelector('#map'),coordinates=data.features.flatMap(feature=>coordinatePairs(feature.geometry?.coordinates??[]));svg.replaceChildren();
   if(!coordinates.length){const text=document.createElementNS(svgNamespace,'text');text.setAttribute('x','500');text.setAttribute('y','300');text.setAttribute('text-anchor','middle');text.textContent='Plan nie zawiera geometrii.';svg.append(text);return}
   let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
@@ -11,10 +12,22 @@ function renderGeoJson(data){
   const project=point=>[offsetX+(point[0]-minX)*scale,600-(offsetY+(point[1]-minY)*scale)];
   data.features.forEach(feature=>geometryPolygons(feature.geometry).forEach(polygon=>{
     const path=document.createElementNS(svgNamespace,'path'),district=Number(feature.properties?.district??0),commands=polygon.map(ring=>ring.map((point,index)=>{const [x,y]=project(point);return`${index?'L':'M'}${x.toFixed(2)},${y.toFixed(2)}`}).join(' ')+' Z').join(' ');
-    path.setAttribute('d',commands);path.setAttribute('fill',districtColors[Math.abs(district)%districtColors.length]);path.setAttribute('fill-rule','evenodd');path.setAttribute('stroke','#152820');path.setAttribute('stroke-width','1.2');path.setAttribute('vector-effect','non-scaling-stroke');
+    const node=String(feature.properties?.node??feature.properties?.key??'');path.setAttribute('d',commands);path.dataset.node=node;path.setAttribute('fill',selectable?(selectedNodes.has(node)?'#2e7d63':'#c7ceca'):districtColors[Math.abs(district)%districtColors.length]);path.setAttribute('fill-rule','evenodd');path.setAttribute('stroke','#152820');path.setAttribute('stroke-width','1.2');path.setAttribute('vector-effect','non-scaling-stroke');if(selectable){path.classList.add('selectable');path.onclick=()=>toggleNode(node)}
     const title=document.createElementNS(svgNamespace,'title');title.textContent=`${feature.properties?.node??'jednostka'} — okręg ${feature.properties?.district??'—'}`;path.append(title);svg.append(path);
   }));
 }
+
+function filterMapping(mapping,allowed){return Object.fromEntries(Object.entries(mapping??{}).filter(([node])=>allowed.has(node)))}
+function applySelectedArea(){
+  if(!loadedGraph||!loadedScenario||!loadedGeometry)return;
+  const allowed=selectedNodes,body=JSON.parse(document.querySelector('#request').value),features=loadedGeometry.features.filter(feature=>allowed.has(String(feature.properties?.node)));
+  body.nodes=loadedGraph.node_ids.filter(node=>allowed.has(String(node)));body.edges=loadedGraph.edges.filter(edge=>allowed.has(String(edge.source))&&allowed.has(String(edge.target)));
+  body.scenario={...loadedScenario,votes_by_unit:filterMapping(loadedScenario.votes_by_unit,allowed),eligible_by_unit:filterMapping(loadedScenario.eligible_by_unit,allowed),population_by_unit:filterMapping(loadedScenario.population_by_unit,allowed)};
+  body.geometry_by_node=Object.fromEntries(features.map(feature=>[String(feature.properties.node),feature.geometry]));body.base_assignment=body.base_assignment?filterMapping(body.base_assignment,allowed):null;body.parent_by_node=filterMapping(body.parent_by_node,allowed);body.container_by_node=filterMapping(body.container_by_node,allowed);
+  document.querySelector('#request').value=JSON.stringify(applyForm(body),null,2);document.querySelector('#load-data-status').textContent=`Wybrano ${body.nodes.length}/${loadedGraph.node_ids.length} obwodów i ${body.edges.length} krawędzi.`;
+}
+function redrawSelection(){document.querySelectorAll('#map path[data-node]').forEach(path=>path.setAttribute('fill',selectedNodes.has(path.dataset.node)?'#2e7d63':'#c7ceca'))}
+function toggleNode(node){selectedNodes.has(node)?selectedNodes.delete(node):selectedNodes.add(node);redrawSelection();applySelectedArea()}
 
 async function showRun(id,alternative=null){
   const query=alternative===null?'':`&alternative=${alternative}`;
@@ -46,6 +59,7 @@ function applyForm(body){
   const seats=document.querySelector('#seats').value.trim();body.rules.seats_per_district=seats.startsWith('{')?JSON.parse(seats):Number(seats);
   body.rules.population_tolerance=Number(document.querySelector('#population-tolerance').value);
   const maxCut=document.querySelector('#max-cut-border').value;body.rules.max_cut_border_m=maxCut===''?null:Number(maxCut);
+  body.rules.indivisible_parent_level=document.querySelector('#indivisible-parent-level').value.trim()||null;
   body.rules.allowed_edge_kinds=Array.from(document.querySelector('#edge-kinds').selectedOptions).map(option=>option.value);
   return body;
 }
@@ -60,6 +74,7 @@ function populateForm(body){
   document.querySelector('#seats').value=typeof body.rules.seats_per_district==='object'?JSON.stringify(body.rules.seats_per_district):body.rules.seats_per_district;
   document.querySelector('#population-tolerance').value=body.rules.population_tolerance;
   document.querySelector('#max-cut-border').value=body.rules.max_cut_border_m??'';
+  document.querySelector('#indivisible-parent-level').value=body.rules.indivisible_parent_level??'';
   const allowed=new Set(body.rules.allowed_edge_kinds??['physical']);Array.from(document.querySelector('#edge-kinds').options).forEach(option=>option.selected=allowed.has(option.value));
 }
 
@@ -67,13 +82,14 @@ async function loadData(){
   const snapshot=document.querySelector('#snapshot').value,scenario=document.querySelector('#scenario').value,status=document.querySelector('#load-data-status');
   if(!snapshot||!scenario){status.textContent='Wybierz migawkę i scenariusz.';return}
   try{
-    const [graph,votes]=await Promise.all([
+    const [graph,votes,geometry]=await Promise.all([
       fetch(`/api/graphs/${snapshot}`).then(response=>{if(!response.ok)throw new Error('Brak aktualnego grafu dla migawki');return response.json()}),
       fetch(`/api/scenarios/${scenario}`).then(response=>{if(!response.ok)throw new Error('Brak scenariusza');return response.json()}),
+      fetch(`/api/snapshots/${snapshot}/precincts`).then(response=>{if(!response.ok)throw new Error('Brak geometrii obwodów dla migawki');return response.json()}),
     ]);
     if(votes.snapshot_id&&votes.snapshot_id!==snapshot)throw new Error('Scenariusz należy do innej migawki');
-    const body=JSON.parse(document.querySelector('#request').value);body.nodes=graph.node_ids;body.edges=graph.edges;body.scenario=votes;
-    document.querySelector('#request').value=JSON.stringify(applyForm(body),null,2);status.textContent=`Załadowano ${graph.node_ids.length} węzłów i ${graph.edges.length} krawędzi.`;
+    const geometryNodes=new Set(geometry.features.map(feature=>String(feature.properties?.node)));if(graph.node_ids.some(node=>!geometryNodes.has(String(node))))throw new Error('Geometria nie zawiera wszystkich węzłów grafu');
+    loadedGraph=graph;loadedScenario=votes;loadedGeometry=geometry;selectedNodes=new Set(graph.node_ids.map(String));renderGeoJson(geometry,{selectable:true});applySelectedArea();document.querySelector('#select-all').disabled=false;
   }catch(error){status.textContent=`Błąd: ${error.message}`}
 }
 
@@ -121,6 +137,7 @@ async function init(){
   document.querySelector('#request').value=JSON.stringify(example,null,2);populateForm(example);
   document.querySelector('#submit').onclick=submit;
   document.querySelector('#load-data').onclick=loadData;
+  document.querySelector('#select-all').onclick=()=>{if(!loadedGraph)return;selectedNodes=new Set(loadedGraph.node_ids.map(String));redrawSelection();applySelectedArea()};
   document.querySelector('#snapshot').onchange=loadReconstructionReport;
 }
 init().catch(error=>{document.querySelector('#health').textContent=`Błąd: ${error.message}`});setInterval(load,5000);

@@ -15,7 +15,7 @@ jednostkowy nie zastępuje próby integracyjnej wskazanej w tej samej pozycji.
 | Duży solver dokładny | `tests/test_scip_solver.py` | `gerry solver-smoke`: zweryfikowane `OPTIMAL` i `INFEASIBLE` | manifest v2 odebrany w obrazie |
 | Kolejka, geometrie i klucze PostGIS | `tests/test_postgres_integration.py`, `tests/test_postgis_sync.py` i migracje SQL | `/ready`, `gerry postgis-sync`, zdrowy PostGIS, API i worker | odebrane w CI: kolejka, klucze, SRID, poprawność geometrii i idempotencja synchronizacji |
 | API i CLI | `tests/test_api.py`, `tests/test_cli_import.py` | `/docs`, walidowane stronicowanie zadań i przykładowy przepływ z README | wykonane |
-| Interfejs WWW | `tests/test_frontend.py` i `node --check frontend/app.js` | lokalna mapa SVG bez CDN, formularz reguł, wybór danych, alternatywy, eksport i panel certyfikatu | automatyczne bramki wykonane; pozostaje ręczny przegląd renderowania |
+| Interfejs WWW | `tests/test_frontend.py`, `tests/test_api.py` i `node --check frontend/app.js` | lokalna mapa SVG bez CDN, komplet reguł, wybór obszaru, spójne filtrowanie danych, alternatywy, eksport i panel certyfikatu | automatyczne bramki wykonane; pozostaje ręczny przegląd renderowania dużej migawki |
 | Eksport | `tests/test_exports.py` | JSON, CSV, GeoJSON, GPKG i HTML, zapis atomowy | wykonane |
 | Obraz i zależności exact | Dockerfile oraz job `exact-docker` w CI | `gerry doctor`, `gerry solver-smoke` i `/ready` | najnowszy obraz odebrany |
 
