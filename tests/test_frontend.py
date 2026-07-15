@@ -4,6 +4,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_frontend_is_a_guided_wizard_for_non_experts() -> None:
+    index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+    styles = (ROOT / "frontend" / "styles.css").read_text(encoding="utf-8")
+    script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")
+
+    # Numbered, plain-language steps guide the user.
+    for heading in (
+        "Wybierz wybory",
+        "Zaznacz obszar na mapie",
+        "Kogo chcesz faworyzować",
+        "Ustawienia podziału",
+    ):
+        assert heading in index
+    assert 'class="step-num"' in index
+
+    # The raw JSON editor stays available but is hidden behind an advanced disclosure.
+    assert "<details" in index
+    request_pos = index.index('id="request"')
+    advanced_pos = index.index("Opcje zaawansowane")
+    assert advanced_pos < request_pos, "JSON editor must live inside the advanced section"
+
+    # Population tolerance is offered as a friendly percentage that maps to the fraction.
+    assert 'id="population-tolerance-pct"' in index
+    assert "/100" in script
+
+    # Target is a picked-from-data choice, not free text typing of committee names.
+    assert '<select id="target"' in index
+    assert "scenarioCommittees" in script
+
+    # The [hidden] attribute must actually hide fields despite the grid layout.
+    assert "[hidden]" in styles
+
+
 def test_frontend_map_is_self_contained_and_offline() -> None:
     index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "frontend" / "app.js").read_text(encoding="utf-8")

@@ -7,43 +7,158 @@
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <header><span class="eyebrow">ANALIZA WYBORCZA</span><h1>Gerrymandering PL</h1></header>
+  <header>
+    <span class="eyebrow">ANALIZA WYBORCZA</span>
+    <h1>Gerrymandering PL</h1>
+    <p class="lead">Sprawdź, jak inny podział na okręgi zmieniłby wynik wyborów. Przejdź po kolei przez cztery kroki — program sam policzy najlepszy możliwy podział i pokaże go na mapie.</p>
+    <p id="system-banner" class="system-banner">Łączenie z programem…</p>
+  </header>
+
   <main>
-    <section class="panel">
-      <h2>Status systemu</h2><p id="health">Łączenie…</p>
-      <dl id="capabilities"></dl>
-      <p class="notice">Stan prawa: 15.07.2026. Nowe warianty wymagają ustanowienia właściwym aktem.</p>
-    </section>
-    <section class="panel"><h2>Profile</h2><ul id="profiles"></ul></section>
-    <section class="panel wide">
-      <h2>Nowa optymalizacja</h2>
-      <p>Wybierz podstawowe parametry, a szczegóły grafu i scenariusza pozostają dostępne w JSON.</p>
-      <div class="form-grid">
-        <label>Migawka<select id="snapshot"><option value="">— wybierz —</option></select></label>
-        <label>Scenariusz<select id="scenario"><option value="">— wybierz —</option></select></label>
-        <label>Profil<select id="profile"></select></label>
-        <label>Rodzaj celu<select id="target-kind"><option value="committee">Komitet</option><option value="candidate">Kandydat (JOW)</option></select></label>
-        <label>Nazwa celu<input id="target" type="text"></label>
-        <label>Kotwica kandydata<input id="candidate-anchor" type="text" placeholder="np. 020302_1"></label>
-        <label>Liczba wariantów<input id="alternatives" type="number" min="1" max="50" value="10"></label>
-        <label>Liczba okręgów<input id="district-count" type="number" min="1" value="2"></label>
-        <label>Mandaty w okręgu<input id="seats" type="text" value="1" title="Liczba albo obiekt JSON"></label>
-        <label>Tolerancja ludności<input id="population-tolerance" type="number" min="0" max="0.999999" step="0.01" value="0.1"></label>
-        <label>Limit przeciętej granicy (m)<input id="max-cut-border" type="number" min="0" step="0.1" placeholder="bez limitu"></label>
-        <label>Niepodzielny poziom nadrzędny<input id="indivisible-parent-level" type="text" placeholder="np. gmina; puste = brak"></label>
-        <label>Dozwolone sąsiedztwo<select id="edge-kinds" multiple><option value="physical" selected>fizyczne</option><option value="bridge">most</option><option value="ferry">prom</option></select></label>
+    <!-- KROK 1 -->
+    <section class="step" id="step-1">
+      <div class="step-head"><span class="step-num">1</span><h2>Wybierz wybory</h2></div>
+      <p class="step-help">To dane, na których pracujemy: wyniki i granice obwodów z konkretnych wyborów.</p>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Wybory</span>
+          <select id="snapshot"><option value="">— wybierz wybory —</option></select>
+        </label>
       </div>
-      <div class="actions"><button id="load-data" type="button">Załaduj dane i wybierz obszar</button><button id="select-all" type="button" disabled>Zaznacz wszystko</button><span id="load-data-status"></span></div>
-      <textarea id="request" spellcheck="false"></textarea>
-      <div class="actions"><button id="submit">Uruchom dokładny solver</button><span id="submit-status"></span></div>
+      <p id="election-status" class="inline-status"></p>
     </section>
-    <section class="panel wide">
-      <h2>Jakość rekonstrukcji</h2>
-      <p>Podsumowanie wybranej migawki i pierwsza strona gmin wymagających uwagi.</p>
-      <div id="reconstruction-report">Wybierz migawkę.</div>
+
+    <!-- KROK 2 -->
+    <section class="step" id="step-2">
+      <div class="step-head"><span class="step-num">2</span><h2>Zaznacz obszar na mapie</h2></div>
+      <p class="step-help">Kliknij gminy/obwody, które chcesz analizować. Możesz zaznaczyć cały kraj albo tylko wybrany region. Zaznaczone obszary są zielone.</p>
+      <div class="actions">
+        <button id="load-data" type="button">Pokaż mapę i wybierz obszar</button>
+        <button id="select-all" type="button" class="ghost" disabled>Zaznacz wszystko</button>
+        <button id="clear-selection" type="button" class="ghost" disabled>Wyczyść</button>
+        <span id="load-data-status" class="inline-status"></span>
+      </div>
+      <svg id="map" viewBox="0 0 1000 600" role="img" aria-label="Mapa wyboru obszaru"><text x="500" y="300" text-anchor="middle">Kliknij „Pokaż mapę”, aby wybrać obszar.</text></svg>
     </section>
-    <section class="panel wide"><h2>Mapa planu</h2><svg id="map" viewBox="0 0 1000 600" role="img" aria-label="Mapa zoptymalizowanych okręgów"><text x="500" y="300" text-anchor="middle">Wybierz zakończone zadanie.</text></svg></section>
-    <section class="panel wide"><h2>Zadania optymalizacji</h2><div id="runs">Brak zadań.</div><article id="run-details"></article><article id="certificate-details"></article></section>
+
+    <!-- KROK 3 -->
+    <section class="step" id="step-3">
+      <div class="step-head"><span class="step-num">3</span><h2>Kogo chcesz faworyzować?</h2></div>
+      <p class="step-help">Program ułoży okręgi tak, aby wybrany komitet lub kandydat zdobył jak najwięcej mandatów — w granicach prawa wyborczego.</p>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Co optymalizujemy?</span>
+          <select id="target-kind">
+            <option value="committee">Partię / komitet wyborczy</option>
+            <option value="candidate">Kandydata (tylko okręgi jednomandatowe)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">Faworyzowany komitet / kandydat</span>
+          <select id="target"><option value="">— najpierw pokaż mapę (krok 2) —</option></select>
+        </label>
+        <label class="field" id="anchor-field" hidden>
+          <span class="field-label">Obwód kandydata</span>
+          <input id="candidate-anchor" type="text" placeholder="np. 020302_1">
+          <span class="field-hint">Obwód, w którym startuje kandydat.</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- KROK 4 -->
+    <section class="step" id="step-4">
+      <div class="step-head"><span class="step-num">4</span><h2>Ustawienia podziału</h2></div>
+      <p class="step-help">Zwykle wystarczą te trzy ustawienia. Domyślne wartości są bezpieczne.</p>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Na ile okręgów podzielić?</span>
+          <input id="district-count" type="number" min="1" value="2">
+        </label>
+        <label class="field">
+          <span class="field-label">Dopuszczalna różnica wielkości okręgów</span>
+          <span class="field-input-suffix"><input id="population-tolerance-pct" type="number" min="0" max="99" step="1" value="10"><span class="suffix">%</span></span>
+          <span class="field-hint">O ile okręgi mogą różnić się liczbą mieszkańców. Większa wartość = łatwiej znaleźć podział.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Ile propozycji pokazać?</span>
+          <input id="alternatives" type="number" min="1" max="50" value="10">
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>Opcje zaawansowane (dla ekspertów)</summary>
+        <p class="step-help">Te pola są opcjonalne. Zmieniaj je tylko, jeśli wiesz, co robią.</p>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Profil prawny</span>
+            <select id="profile"></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Zestaw wyników (scenariusz)</span>
+            <select id="scenario"><option value="">— automatyczny —</option></select>
+          </label>
+          <label class="field">
+            <span class="field-label">Mandaty w okręgu</span>
+            <input id="seats" type="text" value="1" title="Liczba albo obiekt JSON">
+          </label>
+          <label class="field">
+            <span class="field-label">Limit przeciętej granicy (m)</span>
+            <input id="max-cut-border" type="number" min="0" step="0.1" placeholder="bez limitu">
+          </label>
+          <label class="field">
+            <span class="field-label">Niepodzielny poziom nadrzędny</span>
+            <input id="indivisible-parent-level" type="text" placeholder="np. gmina; puste = brak">
+          </label>
+          <label class="field">
+            <span class="field-label">Dozwolone sąsiedztwo</span>
+            <select id="edge-kinds" multiple><option value="physical" selected>fizyczne</option><option value="bridge">most</option><option value="ferry">prom</option></select>
+          </label>
+        </div>
+        <details class="advanced">
+          <summary>Edytor JSON żądania (pełna kontrola)</summary>
+          <p class="step-help">Surowe żądanie wysyłane do programu. Formularz powyżej nadpisuje odpowiadające pola.</p>
+          <textarea id="request" spellcheck="false"></textarea>
+        </details>
+        <!-- hidden bridge: friendly percent ↔ fraction used by the solver -->
+        <input id="population-tolerance" type="hidden" value="0.1">
+      </details>
+
+      <div class="actions primary-actions">
+        <button id="submit">Analizuj podział</button>
+        <span id="submit-status" class="inline-status"></span>
+      </div>
+    </section>
+
+    <!-- WYNIK -->
+    <section class="step result" id="step-result">
+      <div class="step-head"><span class="step-num">✓</span><h2>Wynik</h2></div>
+      <p class="step-help">Po uruchomieniu analizy wynik pojawi się tutaj: mapa okręgów, liczba zdobytych mandatów i wyjaśnienie.</p>
+      <div id="result-summary" class="result-summary">Uruchom analizę w kroku 4, aby zobaczyć wynik.</div>
+      <svg id="result-map" viewBox="0 0 1000 600" role="img" aria-label="Mapa zoptymalizowanych okręgów"><text x="500" y="300" text-anchor="middle">Brak wyniku do pokazania.</text></svg>
+      <div id="runs" class="runs">Brak zadań.</div>
+      <article id="run-details"></article>
+      <details class="advanced" id="certificate-block">
+        <summary>Dowód poprawności wyniku (dla ekspertów)</summary>
+        <article id="certificate-details"></article>
+      </details>
+    </section>
+
+    <!-- SZCZEGÓŁY TECHNICZNE -->
+    <details class="tech-details">
+      <summary>Szczegóły techniczne i stan programu</summary>
+      <div class="tech-grid">
+        <div class="panel">
+          <h3>Stan programu</h3><p id="health">Łączenie…</p>
+          <dl id="capabilities"></dl>
+          <p class="notice">Stan prawa: 15.07.2026. Nowe warianty podziału mogą wymagać ustanowienia właściwym aktem i niezależnej kontroli prawnej.</p>
+        </div>
+        <div class="panel"><h3>Profile prawne</h3><ul id="profiles"></ul></div>
+        <div class="panel">
+          <h3>Jakość rekonstrukcji</h3>
+          <div id="reconstruction-report">Wybierz wybory (krok 1).</div>
+        </div>
+      </div>
+    </details>
   </main>
   <script src="/assets/app.js"></script>
 </body>
