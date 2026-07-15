@@ -13,7 +13,7 @@ jednostkowy nie zastępuje próby integracyjnej wskazanej w tej samej pozycji.
 | Walidacja prawna | `tests/test_law_conditions.py`, profil YAML z SHA-256 | niezależna kontrola eksperta dla migawki prawa | implementacja głównych reguł wykonana; opinia eksperta oczekuje |
 | Mały solver dokładny | `tests/test_solver.py` | replay certyfikatu enumeracji | wykonane |
 | Duży solver dokładny | `tests/test_scip_solver.py` | `gerry solver-smoke`: zweryfikowane `OPTIMAL` i `INFEASIBLE` | manifest v2 odebrany w obrazie |
-| Kolejka, geometrie i klucze PostGIS | `tests/test_postgres_integration.py`, `tests/test_postgis_sync.py` i migracje SQL | `/ready`, `gerry postgis-sync`, zdrowy PostGIS, API i worker | migracja i usługi odebrane; CI sprawdza kolejkę, klucze, SRID, geometrię i idempotencję synchronizacji |
+| Kolejka, geometrie i klucze PostGIS | `tests/test_postgres_integration.py`, `tests/test_postgis_sync.py` i migracje SQL | `/ready`, `gerry postgis-sync`, zdrowy PostGIS, API i worker | odebrane w CI: kolejka, klucze, SRID, poprawność geometrii i idempotencja synchronizacji |
 | API i CLI | `tests/test_api.py`, `tests/test_cli_import.py` | `/docs`, walidowane stronicowanie zadań i przykładowy przepływ z README | wykonane |
 | Interfejs WWW | `tests/test_frontend.py` i `node --check frontend/app.js` | lokalna mapa SVG bez CDN, formularz reguł, wybór danych, alternatywy, eksport i panel certyfikatu | automatyczne bramki wykonane; pozostaje ręczny przegląd renderowania |
 | Eksport | `tests/test_exports.py` | JSON, CSV, GeoJSON, GPKG i HTML, zapis atomowy | wykonane |

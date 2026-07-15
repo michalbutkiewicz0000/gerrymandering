@@ -304,8 +304,8 @@ Testy i jakość
 ============================
 
 - Końcowy audyt zgodności implementacji z pełnym zakresem ustalonego planu.
-- Wykonanie trzech testów na prawdziwym PostGIS w CI: kolejki, integralności
-  kluczy migawkowych oraz idempotentnej synchronizacji geometrii i grafu.
+- Odbiór obrazu exact po ostatniej zmianie synchronizacji PostGIS; job Python,
+  obejmujący trzy testy na prawdziwym PostGIS, zakończył się powodzeniem.
 - Odbiór `real-smoke` wewnątrz najnowszego obrazu z danymi źródłowymi
   zamontowanymi wyłącznie do odczytu.
 - Rozszerzanie testów integracyjnych dużego solvera oraz alternatywnych planów.
