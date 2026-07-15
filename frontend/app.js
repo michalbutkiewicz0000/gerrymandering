@@ -50,7 +50,9 @@ function updateCascade(){
   document.querySelector('#field-powiat').hidden=!(scope==='powiat'||scope==='gmina');
   document.querySelector('#field-gmina').hidden=scope!=='gmina';
   document.querySelector('#profile-hint').textContent=scopeHint(plan);
-  if(showW&&!document.querySelector('#sel-wojewodztwo').options.length)populateWojewodztwa();
+  // The select always carries a placeholder option, so fill it whenever no real
+  // województwo is listed yet (options beyond the placeholder).
+  if(showW&&document.querySelector('#sel-wojewodztwo').options.length<=1)populateWojewodztwa();
 }
 
 function statusExplanation(run){
@@ -179,7 +181,7 @@ async function loadAssets(){
     fetch('/api/profiles/plans').then(response=>response.json()),
     fetch('/api/units').then(response=>response.json()),
   ]);
-  loadedPlans=plans;loadedUnits=unitOptions;
+  loadedPlans=plans;loadedUnits=unitOptions;populateWojewodztwa();
   document.querySelector('#snapshot').innerHTML='<option value="">— wybierz wybory —</option>'+snapshots.map(item=>`<option value="${item.id}">${escapeHtml(item.election_id)} · ${escapeHtml(item.effective_date)}</option>`).join('');
   document.querySelector('#scenario').innerHTML='<option value="">— automatyczny —</option>'+scenarios.map(item=>`<option value="${item.id}" data-snapshot="${item.snapshot_id??''}">${escapeHtml(item.name)}</option>`).join('');
 }
